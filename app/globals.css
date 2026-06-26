@@ -1,26 +1,123 @@
 @import "tailwindcss";
 
+/*
+  ICP Portal — Pharma theme tokens.
+
+  Pattern (Tailwind v4): raw palette values live as CSS variables in :root, and
+  `@theme inline` maps them into Tailwind's theme so utilities like `bg-primary`,
+  `text-ink`, `bg-lavender`, `border-line` are generated. Components must use
+  TOKENS (e.g. bg-primary), never hardcoded hex. To restyle the whole app, edit
+  the :root values below — nothing else.
+
+  Look & feel: calm, professional, pharmaceutical. Deep-purple chrome, teal
+  highlights, white / lavender / mint surfaces. Text contrast targets WCAG AA.
+*/
+
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  /* Brand — Deep Purple */
+  --primary: #4c1d95; /* nav sidebar, headers, primary buttons */
+  --primary-hover: #3b1578; /* darker hover */
+  --primary-foreground: #ffffff; /* text on purple */
+
+  /* Secondary — Teal / Blue-Green */
+  --teal: #0d9488; /* success / active / "Present" */
+  --teal-light: #14b8a6;
+  --teal-foreground: #ffffff;
+
+  /* Soft accent surfaces */
+  --lavender: #ede9fe; /* subtle card / section backgrounds */
+  --mint: #d1fae5; /* subtle success backgrounds */
+
+  /* Neutrals */
+  --canvas: #f7f6fb; /* app background (faint lavender tint) */
+  --surface: #ffffff; /* cards, panels */
+  --ink: #1f2937; /* primary text on light (AA) */
+  --muted: #6b7280; /* secondary text */
+  --line: #e5e7eb; /* borders / dividers */
+
+  /* Semantic state */
+  --success: #0d9488;
+  --warning: #b45309;
+  --danger: #b91c1c;
+
+  /* Attendance chart (per spec: Absent uses purple, NOT alarming red) */
+  --chart-present: #0d9488; /* teal/green */
+  --chart-absent: #9333ea; /* muted purple */
+
+  /* Radii & elevation scale (consistent across cards/sheets/modals) */
+  --radius-sm: 0.375rem;
+  --radius: 0.625rem;
+  --radius-lg: 1rem;
 }
 
 @theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
+  /* Map palette -> Tailwind color utilities */
+  --color-primary: var(--primary);
+  --color-primary-hover: var(--primary-hover);
+  --color-primary-foreground: var(--primary-foreground);
+
+  --color-teal: var(--teal);
+  --color-teal-light: var(--teal-light);
+  --color-teal-foreground: var(--teal-foreground);
+
+  --color-lavender: var(--lavender);
+  --color-mint: var(--mint);
+
+  --color-canvas: var(--canvas);
+  --color-surface: var(--surface);
+  --color-ink: var(--ink);
+  --color-muted: var(--muted);
+  --color-line: var(--line);
+
+  --color-success: var(--success);
+  --color-warning: var(--warning);
+  --color-danger: var(--danger);
+
+  --color-chart-present: var(--chart-present);
+  --color-chart-absent: var(--chart-absent);
+
+  /* Radii */
+  --radius-sm: var(--radius-sm);
+  --radius-md: var(--radius);
+  --radius-lg: var(--radius-lg);
+
+  /* Fonts (wired from next/font in layout.tsx) */
+  --font-sans: var(--font-sans);
+  --font-mono: var(--font-mono);
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
+@layer base {
+  html {
+    -webkit-text-size-adjust: 100%;
   }
-}
 
-body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  body {
+    background: var(--canvas);
+    color: var(--ink);
+    /* Latin uses Geist; Devanagari (hi/mr) falls through to Noto Sans Devanagari. */
+    font-family: var(--font-sans), var(--font-devanagari), ui-sans-serif,
+      system-ui, sans-serif;
+    /* base 16px / 1.5 line-height per typography rules */
+    font-size: 1rem;
+    line-height: 1.5;
+  }
+
+  /* Visible focus ring on every interactive element (a11y CRITICAL) */
+  :focus-visible {
+    outline: 2px solid var(--teal);
+    outline-offset: 2px;
+    border-radius: var(--radius-sm);
+  }
+
+  /* Respect reduced-motion: near-disable all transitions/animations */
+  @media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.01ms !important;
+      scroll-behavior: auto !important;
+    }
+  }
 }
