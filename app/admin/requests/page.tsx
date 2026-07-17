@@ -7,10 +7,12 @@
 import { desc, eq } from "drizzle-orm";
 import { db } from "@/db";
 import { users } from "@/db/schema";
+import { requireCapability } from "@/lib/auth";
 import { getDropdownOptions } from "@/lib/edit-mode/settings";
 import { RequestsContent, type PendingRequest } from "./RequestsContent";
 
 export default async function RequestsPage() {
+  await requireCapability("manageUsers");
   const [rows, courseOpts, classOpts, batchOpts] = await Promise.all([
     db
       .select({

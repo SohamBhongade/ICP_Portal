@@ -1,13 +1,12 @@
 // i18n configuration.
 //
-// WHY A PLAIN JSON + CONTEXT APPROACH (not next-intl):
-// Next.js 16.2.9 is very new and next-intl may not yet support it cleanly. A
-// hand-rolled "JSON dictionaries + React context" layer has ZERO compatibility
-// risk, instant client-side switching, and is trivial to migrate to next-intl
-// later if we want richer formatting/pluralization. The dictionary shape here
-// is intentionally next-intl-friendly (nested namespaces, dot-path keys).
+// The portal is ENGLISH-ONLY. The translation layer (JSON dictionary + React
+// context + useT) is intentionally kept so UI strings stay centralized and Edit
+// Mode text overrides keep working — but there is now a single locale, so the
+// language switcher UI has been removed. Re-adding a language is as simple as
+// appending its code here and dropping a messages/<code>.json dictionary in.
 
-export const locales = ["en", "hi", "mr"] as const;
+export const locales = ["en"] as const;
 export type Locale = (typeof locales)[number];
 
 export const defaultLocale: Locale = "en";

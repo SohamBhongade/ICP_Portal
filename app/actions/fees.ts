@@ -2,9 +2,10 @@
 
 // Phase 10 — Fee ledger server actions.
 //
-// ALL entry points are ADMIN-ONLY, re-verified server-side on every call
-// (never trust the client). Students read their own ledger through the server
-// component at /student/fees; they never reach a mutation here.
+// ALL entry points require the `fees` capability (admin, principle, office
+// admin), re-verified server-side on every call (never trust the client).
+// Students read their own ledger through the server component at /student/fees;
+// they never reach a mutation here.
 //
 //   - fetchStudentLedgerAction: load one student's ledger + computed balances
 //   - postFeeTransactionAction: append a single charge / payment row
@@ -15,7 +16,7 @@ import { asc, eq } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import { db } from "@/db";
 import { feeLedgers, users } from "@/db/schema";
-import { getCurrentUser } from "@/lib/auth";
+import { currentUserWithCapability } from "@/lib/auth";
 import {
   computeBalances,
   type FeeBalances,
@@ -23,11 +24,9 @@ import {
   type LedgerType,
 } from "@/lib/fees";
 
-/** Returns the admin user, or null if the caller is not an admin. */
-async function assertAdmin() {
-  const user = await getCurrentUser();
-  if (!user || user.role !== "admin") return null;
-  return user;
+/** Returns the caller if they may handle fees, else null. */
+async function assertFees() {
+  return currentUserWithCapability("fees");
 }
 
 export type LedgerStudent = {
@@ -45,7 +44,7 @@ export type LedgerResult =
 export async function fetchStudentLedgerAction(
   studentId: number,
 ): Promise<LedgerResult> {
-  if (!(await assertAdmin())) return { ok: false, error: "forbidden" };
+  if (!(await assertFees())) return { ok: false, error: "forbidden" };
 
   const [student] = await db
     .select({
@@ -107,8 +106,8 @@ export type PostTransactionResult =
 export async function postFeeTransactionAction(
   input: PostTransactionInput,
 ): Promise<PostTransactionResult> {
-  const admin = await assertAdmin();
-  if (!admin) return { ok: false, error: "forbidden" };
+  const actor = await assertFees();
+  if (!actor) return { ok: false, error: "forbidden" };
 
   const particulars = input.particulars?.trim();
   const date = input.date?.trim();
@@ -142,7 +141,7 @@ export async function postFeeTransactionAction(
     amount,
     receiptNo: input.receiptNo?.trim() || null,
     date,
-    recordedBy: admin.id,
+    recordedBy: actor.id,
   });
 
   revalidatePath("/admin/fees");

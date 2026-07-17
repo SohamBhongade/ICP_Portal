@@ -1,12 +1,9 @@
-// Static dictionary imports + the core lookup logic shared by client and server.
+// Static dictionary import + the core lookup logic shared by client and server.
 //
-// Dictionaries are imported statically so all three languages ship in the client
-// bundle — that's what makes language switching INSTANT (no fetch on switch).
-// They're small JSON files, so the bundle cost is negligible.
+// English-only: a single dictionary is bundled. The map is still keyed by Locale
+// so re-introducing a language later means only adding an import + entry here.
 
 import en from "@/messages/en.json";
-import hi from "@/messages/hi.json";
-import mr from "@/messages/mr.json";
 import { defaultLocale, type Locale } from "./config";
 
 /** A nested dictionary: leaves are strings, branches are sub-dictionaries. */
@@ -14,8 +11,6 @@ export type Dict = { [key: string]: string | Dict };
 
 export const dictionaries: Record<Locale, Dict> = {
   en: en as unknown as Dict,
-  hi: hi as unknown as Dict,
-  mr: mr as unknown as Dict,
 };
 
 /** Flat per-locale overrides sourced from the DB (Edit Mode). Keys are dot-paths. */

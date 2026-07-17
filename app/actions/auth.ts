@@ -78,23 +78,17 @@ export async function logoutAction(): Promise<void> {
 
 // ---------- Public self-service account requests ----------
 //
-// Anyone can request access; the row lands as status='pending' with a hashed
-// password they chose, so login can show the friendly "awaiting approval"
-// message (login requires a passwordHash before it reads status). An admin then
-// reviews it in /admin/requests, fixes any typos, and flips it to 'active'.
-//
-// Two shapes by requested role:
-//   - student → roll number required (sign in by Student ID); email optional
-//   - teacher (staff) → email + phone required (sign in by email); no roll/class
-// Self-requested staff can only ever be 'teacher'; admins are never self-served.
+// STUDENTS ONLY. Staff accounts (faculty/office admin/principle/admin) are never
+// self-served — they are created inside the Users console by an authorised staff
+// member. A student request lands as status='pending' with a hashed password
+// they chose, so login can show the friendly "awaiting approval" message (login
+// requires a passwordHash before it reads status). Admin/Principle/Office Admin
+// then review it in /admin/requests, fix any typos, and flip it to 'active'.
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const MIN_PASSWORD = 6;
 
-export type RequestAccountRole = "student" | "teacher";
-
 export type RequestAccountInput = {
-  role?: RequestAccountRole; // defaults to "student"
   fullName: string;
   studentId?: string;
   email?: string;
@@ -122,10 +116,6 @@ export type RequestAccountResult =
 export async function requestAccountAction(
   input: RequestAccountInput,
 ): Promise<RequestAccountResult> {
-  const role: RequestAccountRole =
-    input.role === "teacher" ? "teacher" : "student";
-  const isStaff = role === "teacher";
-
   const fullName = input.fullName?.trim() ?? "";
   const studentId = input.studentId?.trim() || undefined;
   const email = input.email?.trim().toLowerCase() || undefined;
@@ -133,18 +123,10 @@ export async function requestAccountAction(
   const password = input.password ?? "";
 
   if (!fullName) return { ok: false, error: "missingName" };
-
-  if (isStaff) {
-    if (!email) return { ok: false, error: "missingEmail" };
-    if (!EMAIL_RE.test(email)) return { ok: false, error: "invalidEmail" };
-    if (!phone) return { ok: false, error: "missingPhone" };
-  } else {
-    if (!studentId) return { ok: false, error: "missingRollNo" };
-    if (email && !EMAIL_RE.test(email)) {
-      return { ok: false, error: "invalidEmail" };
-    }
+  if (!studentId) return { ok: false, error: "missingRollNo" };
+  if (email && !EMAIL_RE.test(email)) {
+    return { ok: false, error: "invalidEmail" };
   }
-
   if (password.length < MIN_PASSWORD) {
     return { ok: false, error: "weakPassword" };
   }
@@ -155,17 +137,14 @@ export async function requestAccountAction(
       .insert(users)
       .values({
         fullName,
-        // Staff have no roll number / academic fields.
-        studentId: isStaff ? undefined : studentId,
+        studentId,
         email,
         phone,
-        role,
+        role: "student",
         status: "pending",
-        course: isStaff ? undefined : input.course?.trim() || undefined,
-        className: isStaff ? undefined : input.className?.trim() || undefined,
-        practicalBatch: isStaff
-          ? undefined
-          : input.practicalBatch?.trim() || undefined,
+        course: input.course?.trim() || undefined,
+        className: input.className?.trim() || undefined,
+        practicalBatch: input.practicalBatch?.trim() || undefined,
         passwordHash,
       })
       .onConflictDoNothing()

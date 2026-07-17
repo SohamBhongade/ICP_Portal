@@ -94,9 +94,8 @@
   body {
     background: var(--canvas);
     color: var(--ink);
-    /* Latin uses Geist; Devanagari (hi/mr) falls through to Noto Sans Devanagari. */
-    font-family: var(--font-sans), var(--font-devanagari), ui-sans-serif,
-      system-ui, sans-serif;
+    /* English-only portal — Latin via Geist. */
+    font-family: var(--font-sans), ui-sans-serif, system-ui, sans-serif;
     /* base 16px / 1.5 line-height per typography rules */
     font-size: 1rem;
     line-height: 1.5;

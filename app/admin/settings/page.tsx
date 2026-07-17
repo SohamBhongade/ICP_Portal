@@ -1,6 +1,7 @@
 // Admin Settings — Edit Mode home. Loads each dropdown category's active
 // options server-side, then hands off to the client SettingsContent.
 
+import { requireCapability } from "@/lib/auth";
 import {
   getDropdownOptions,
   type DropdownCategory,
@@ -16,6 +17,7 @@ const CATEGORIES: DropdownCategory[] = [
 ];
 
 export default async function SettingsPage() {
+  await requireCapability("settings");
   const optionLists = await Promise.all(
     CATEGORIES.map((category) => getDropdownOptions(category)),
   );

@@ -2,8 +2,9 @@
 
 // Phase 8 — Onboarding server actions.
 //
-// Two entry points, both ADMIN-ONLY (re-verified server-side on every call —
-// never trust the client):
+// Entry points require the `manageUsers` capability (admin, principle, office
+// admin), re-verified server-side on every call — never trust the client. The
+// exception is deleteUserAction, which requires `deleteUsers` (admin only).
 //   - createUserAction:         manual single student / staff creation
 //   - bulkImportStudentsAction: CSV batch student creation
 //
@@ -25,9 +26,13 @@ import {
   supportTickets,
   users,
 } from "@/db/schema";
-import { getCurrentUser } from "@/lib/auth";
+import { currentUserWithCapability } from "@/lib/auth";
+import { canAssignRole, type Role } from "@/lib/auth/permissions";
+import { resolveCourse } from "@/lib/courses";
 
-export type OnboardRole = "student" | "teacher" | "admin";
+// A created account can be any role — which ones a given actor may actually
+// assign is enforced by canAssignRole() below (anti-escalation).
+export type OnboardRole = Role;
 
 /** Manual single-create payload (drawer form). */
 export type CreateUserInput = {
@@ -59,6 +64,7 @@ export type ActionError =
   | "missingRollNo"
   | "missingEmail"
   | "invalidEmail"
+  | "invalidCourse"
   | "duplicate"
   | "unknown";
 
@@ -77,11 +83,9 @@ export type BulkImportResult =
 // Pragmatic email shape check (mirrors the client-side check).
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
-/** Returns the admin user, or null if the caller is not an admin. */
-async function assertAdmin() {
-  const user = await getCurrentUser();
-  if (!user || user.role !== "admin") return null;
-  return user;
+/** Returns the caller if they may manage users, else null. */
+async function assertManageUsers() {
+  return currentUserWithCapability("manageUsers");
 }
 
 /** Temporary first-login password. See file header for the pattern. */
@@ -96,9 +100,14 @@ function tempPassword(role: OnboardRole, studentId?: string, email?: string) {
 export async function createUserAction(
   input: CreateUserInput,
 ): Promise<CreateUserResult> {
-  if (!(await assertAdmin())) return { ok: false, error: "forbidden" };
+  const actor = await assertManageUsers();
+  if (!actor) return { ok: false, error: "forbidden" };
 
   const role = input.role;
+  // Anti-escalation: an actor can never mint a role above their own tier.
+  if (!canAssignRole(actor.role as Role, role)) {
+    return { ok: false, error: "forbidden" };
+  }
   const fullName = input.fullName?.trim() ?? "";
   const email = input.email?.trim().toLowerCase() || undefined;
   const phone = input.phone?.trim() || undefined;
@@ -112,7 +121,7 @@ export async function createUserAction(
       return { ok: false, error: "invalidEmail" };
     }
   } else {
-    // Staff (teacher/admin) log in by email, so it is mandatory.
+    // All staff roles log in by email, so it is mandatory.
     if (!email) return { ok: false, error: "missingEmail" };
     if (!EMAIL_RE.test(email)) return { ok: false, error: "invalidEmail" };
   }
@@ -123,6 +132,16 @@ export async function createUserAction(
   );
 
   const isStudent = role === "student";
+
+  // Normalize + validate the course to a canonical enum value before writing.
+  // Only students carry a course; an unrecognised value is rejected outright.
+  let course: string | undefined;
+  if (isStudent) {
+    const courseRes = resolveCourse(input.course);
+    if (courseRes.status === "invalid") return { ok: false, error: "invalidCourse" };
+    course = courseRes.status === "ok" ? courseRes.value : undefined;
+  }
+
   const res = await db
     .insert(users)
     .values({
@@ -132,7 +151,7 @@ export async function createUserAction(
       studentId: isStudent ? studentId : undefined,
       role,
       status: "active",
-      course: isStudent ? input.course?.trim() || undefined : undefined,
+      course,
       className: isStudent ? input.className?.trim() || undefined : undefined,
       practicalBatch: isStudent
         ? input.practicalBatch?.trim() || undefined
@@ -152,7 +171,7 @@ export async function createUserAction(
 export async function bulkImportStudentsAction(
   rows: CsvStudentRow[],
 ): Promise<BulkImportResult> {
-  if (!(await assertAdmin())) return { ok: false, error: "forbidden" };
+  if (!(await assertManageUsers())) return { ok: false, error: "forbidden" };
 
   let created = 0;
   const failed: { row: number; reason: ActionError }[] = [];
@@ -177,6 +196,15 @@ export async function bulkImportStudentsAction(
       continue;
     }
 
+    // Normalize + validate the course. A bad course fails ONLY that row (with
+    // its 1-based number) — good rows still import; the DB is never corrupted.
+    const courseRes = resolveCourse(r.course);
+    if (courseRes.status === "invalid") {
+      failed.push({ row: i + 1, reason: "invalidCourse" });
+      continue;
+    }
+    const course = courseRes.status === "ok" ? courseRes.value : undefined;
+
     try {
       const passwordHash = await bcrypt.hash(
         tempPassword("student", studentId, email),
@@ -191,7 +219,7 @@ export async function bulkImportStudentsAction(
           phone: r.phone?.trim() || undefined,
           role: "student",
           status: "active",
-          course: r.course?.trim() || undefined,
+          course,
           className: r.className?.trim() || undefined,
           practicalBatch: r.practicalBatch?.trim() || undefined,
           passwordHash,
@@ -244,7 +272,7 @@ function revalidateRequestViews() {
 export async function approveRequestAction(
   input: ApproveRequestInput,
 ): Promise<RequestResult> {
-  if (!(await assertAdmin())) return { ok: false, error: "forbidden" };
+  if (!(await assertManageUsers())) return { ok: false, error: "forbidden" };
 
   const isStaff = input.role !== "student";
   const fullName = input.fullName?.trim() ?? "";
@@ -304,7 +332,8 @@ export type DeleteUserResult =
 export async function deleteUserAction(
   userId: number,
 ): Promise<DeleteUserResult> {
-  const admin = await assertAdmin();
+  // Deletion is the single most destructive action — admin only (deleteUsers).
+  const admin = await currentUserWithCapability("deleteUsers");
   if (!admin) return { ok: false, error: "forbidden" };
   if (admin.id === userId) return { ok: false, error: "self" };
 
@@ -362,7 +391,7 @@ export async function deleteUserAction(
 export async function rejectRequestAction(
   id: number,
 ): Promise<RequestResult> {
-  if (!(await assertAdmin())) return { ok: false, error: "forbidden" };
+  if (!(await assertManageUsers())) return { ok: false, error: "forbidden" };
 
   const res = await db
     .update(users)

@@ -8,9 +8,11 @@
 import { asc, eq } from "drizzle-orm";
 import { db } from "@/db";
 import { users } from "@/db/schema";
+import { requireCapability } from "@/lib/auth";
 import { FeesAdmin } from "./FeesAdmin";
 
 export default async function AdminFeesPage() {
+  await requireCapability("fees");
   const students = await db
     .select({
       id: users.id,

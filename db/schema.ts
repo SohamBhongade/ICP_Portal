@@ -25,11 +25,20 @@ import { sqliteTable, text, integer, real } from "drizzle-orm/sqlite-core";
 export const users = sqliteTable("users", {
   id: integer("id").primaryKey({ autoIncrement: true }),
   fullName: text("full_name").notNull(),
-  studentId: text("student_id").unique(), // null for teachers/admins
+  studentId: text("student_id").unique(), // null for staff/admins
   email: text("email").unique(), // login identifier for staff
   phone: text("phone"),
   passwordHash: text("password_hash"), // null until activated
-  role: text("role", { enum: ["admin", "teacher", "student"] })
+  role: text("role", {
+    enum: [
+      "admin",
+      "office admin",
+      "principle",
+      "staff",
+      "faculty",
+      "student",
+    ],
+  })
     .notNull()
     .default("student"),
   course: text("course"), // value sourced from dropdown_options
@@ -38,7 +47,7 @@ export const users = sqliteTable("users", {
   status: text("status", { enum: ["pending", "active", "rejected"] })
     .notNull()
     .default("pending"),
-  preferredLanguage: text("preferred_language", { enum: ["en", "hi", "mr"] })
+  preferredLanguage: text("preferred_language", { enum: ["en"] })
     .notNull()
     .default("en"),
   createdAt: integer("created_at", { mode: "timestamp" })
@@ -143,7 +152,7 @@ export const appSettings = sqliteTable("app_settings", {
 // then overlays these so Edit Mode text edits take effect.
 export const textOverrides = sqliteTable("text_overrides", {
   id: integer("id").primaryKey({ autoIncrement: true }),
-  locale: text("locale", { enum: ["en", "hi", "mr"] }).notNull(),
+  locale: text("locale", { enum: ["en"] }).notNull(),
   key: text("key").notNull(),
   value: text("value").notNull(),
 });

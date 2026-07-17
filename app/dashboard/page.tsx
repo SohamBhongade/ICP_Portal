@@ -4,8 +4,11 @@
 
 import { redirect } from "next/navigation";
 import { requireUser } from "@/lib/auth";
+import { landingPath, type Role } from "@/lib/auth/permissions";
 
 export default async function DashboardPage() {
   const user = await requireUser();
-  redirect(`/${user.role}`);
+  // Role name no longer maps 1:1 to a route (e.g. "office admin"), so route via
+  // the shared landing-path helper instead of `/${role}`.
+  redirect(landingPath(user.role as Role));
 }

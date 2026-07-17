@@ -8,6 +8,7 @@
 import { eq, sql } from "drizzle-orm";
 import { db } from "@/db";
 import { attendanceLogs, users } from "@/db/schema";
+import { requireCapability } from "@/lib/auth";
 import {
   AdminAttendanceOverview,
   AT_RISK_THRESHOLD,
@@ -15,6 +16,8 @@ import {
 } from "./AdminAttendanceOverview";
 
 export default async function AdminAttendancePage() {
+  // Read-only, cross-class monitoring is a management view (admin + principle).
+  await requireCapability("settings");
   const [agg, students, sessionRow] = await Promise.all([
     db
       .select({

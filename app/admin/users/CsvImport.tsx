@@ -20,6 +20,7 @@ import {
   type ActionError,
   type CsvStudentRow,
 } from "@/app/actions/onboarding";
+import { resolveCourse } from "@/lib/courses";
 import type { ToastKind } from "./UsersContent";
 
 type TargetField = keyof CsvStudentRow;
@@ -119,15 +120,27 @@ export function CsvImport({
     });
   }, [rows, mapping]);
 
-  // Per-row client validation -> error code (or null = ready).
+  // Per-row client validation -> error code (or null = ready). Mirrors the
+  // authoritative server checks so the preview never disagrees with the import.
   const validations: (ActionError | null)[] = useMemo(() => {
     return mapped.map((row) => {
       if (!row.fullName) return "missingName";
       if (!row.studentId) return "missingRollNo";
       if (row.email && !EMAIL_RE.test(row.email)) return "invalidEmail";
+      if (resolveCourse(row.course).status === "invalid") return "invalidCourse";
       return null;
     });
   }, [mapped]);
+
+  // The canonical course each row will actually be saved as ("" when none).
+  const resolvedCourses: string[] = useMemo(
+    () =>
+      mapped.map((row) => {
+        const res = resolveCourse(row.course);
+        return res.status === "ok" ? res.value : "";
+      }),
+    [mapped],
+  );
 
   const validRows = useMemo(
     () => mapped.filter((_, i) => validations[i] === null),
@@ -321,6 +334,9 @@ export function CsvImport({
                           {t("onboarding.csv.fieldEmail")}
                         </th>
                         <th className="px-3 py-2 font-medium">
+                          {t("onboarding.csv.fieldCourse")}
+                        </th>
+                        <th className="px-3 py-2 font-medium">
                           {t("onboarding.csv.statusOk")}
                         </th>
                       </tr>
@@ -342,6 +358,19 @@ export function CsvImport({
                             </td>
                             <td className="px-3 py-1.5 text-muted">
                               {row.email || "—"}
+                            </td>
+                            <td className="px-3 py-1.5">
+                              {err === "invalidCourse" ? (
+                                <span className="text-danger">
+                                  {row.course}
+                                </span>
+                              ) : resolvedCourses[i] ? (
+                                <span className="text-ink">
+                                  {resolvedCourses[i]}
+                                </span>
+                              ) : (
+                                <span className="text-muted">—</span>
+                              )}
                             </td>
                             <td className="px-3 py-1.5">
                               {err ? (

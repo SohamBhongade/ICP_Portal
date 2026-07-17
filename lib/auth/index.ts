@@ -16,6 +16,12 @@ import {
   type Role,
   type SessionPayload,
 } from "./session";
+import {
+  can,
+  canAny,
+  landingPath,
+  type Capability,
+} from "./permissions";
 
 /** Read + verify the session payload from the cookie (no DB hit). */
 export async function getSession(): Promise<SessionPayload | null> {
@@ -71,5 +77,43 @@ export async function requireUser(): Promise<User> {
 export async function requireRole(...roles: Role[]): Promise<User> {
   const user = await requireUser();
   if (!roles.includes(user.role as Role)) redirect("/dashboard");
+  return user;
+}
+
+/**
+ * Page guard: require a single capability. On failure the user is bounced to
+ * their own role's landing page (never a generic 403 screen — keeps navigation
+ * coherent for the mixed staff roles).
+ */
+export async function requireCapability(
+  capability: Capability,
+): Promise<User> {
+  const user = await requireUser();
+  if (!can(user.role as Role, capability)) {
+    redirect(landingPath(user.role as Role));
+  }
+  return user;
+}
+
+/** Page guard: require ANY of the listed capabilities. */
+export async function requireAnyCapability(
+  ...capabilities: Capability[]
+): Promise<User> {
+  const user = await requireUser();
+  if (!canAny(user.role as Role, ...capabilities)) {
+    redirect(landingPath(user.role as Role));
+  }
+  return user;
+}
+
+/**
+ * Server-action guard (non-redirecting): returns the current user only if they
+ * hold `capability`, else null so the action can return a `forbidden` result.
+ */
+export async function currentUserWithCapability(
+  capability: Capability,
+): Promise<User | null> {
+  const user = await getCurrentUser();
+  if (!user || !can(user.role as Role, capability)) return null;
   return user;
 }

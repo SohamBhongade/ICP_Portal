@@ -13,6 +13,7 @@ import { useT } from "@/components/i18n/LanguageProvider";
 import { Editable } from "@/components/edit-mode/Editable";
 import type { DropdownOptionItem } from "@/components/edit-mode/EditableDropdown";
 import { deleteUserAction } from "@/app/actions/onboarding";
+import type { Role } from "@/lib/auth/permissions";
 import { CreateUserDrawer } from "./CreateUserDrawer";
 import { CsvImport } from "./CsvImport";
 
@@ -22,7 +23,7 @@ export type UserRow = {
   studentId: string | null;
   email: string | null;
   phone: string | null;
-  role: "admin" | "teacher" | "student";
+  role: Role;
   course: string | null;
   className: string | null;
   status: "pending" | "active" | "rejected";
@@ -31,9 +32,12 @@ export type UserRow = {
 export type ToastKind = "success" | "error";
 export type Toast = { id: number; kind: ToastKind; message: string };
 
-const ROLE_LABEL: Record<UserRow["role"], string> = {
+const ROLE_LABEL: Record<Role, string> = {
   admin: "onboarding.roleAdmin",
-  teacher: "onboarding.roleTeacher",
+  principle: "onboarding.rolePrinciple",
+  "office admin": "onboarding.roleOfficeAdmin",
+  faculty: "onboarding.roleFaculty",
+  staff: "onboarding.roleStaff",
   student: "onboarding.roleStudent",
 };
 
@@ -54,11 +58,17 @@ export function UsersContent({
   courseOptions,
   classOptions,
   batchOptions,
+  canDelete,
+  assignableRoles,
 }: {
   users: UserRow[];
   courseOptions: DropdownOptionItem[];
   classOptions: DropdownOptionItem[];
   batchOptions: DropdownOptionItem[];
+  // Only Admins may delete — the column + button are hidden otherwise.
+  canDelete: boolean;
+  // Roles the current actor is allowed to create (anti-escalation).
+  assignableRoles: Role[];
 }) {
   const t = useT();
 
@@ -163,7 +173,10 @@ export function UsersContent({
                 allLabel={t("onboarding.allRoles")}
                 options={[
                   { value: "student", label: t("onboarding.roleStudent") },
-                  { value: "teacher", label: t("onboarding.roleTeacher") },
+                  { value: "faculty", label: t("onboarding.roleFaculty") },
+                  { value: "staff", label: t("onboarding.roleStaff") },
+                  { value: "office admin", label: t("onboarding.roleOfficeAdmin") },
+                  { value: "principle", label: t("onboarding.rolePrinciple") },
                   { value: "admin", label: t("onboarding.roleAdmin") },
                 ]}
               />
@@ -224,14 +237,14 @@ export function UsersContent({
                     <Th>{t("onboarding.colCourse")}</Th>
                     <Th>{t("onboarding.colClass")}</Th>
                     <Th>{t("onboarding.colStatus")}</Th>
-                    <Th>{t("onboarding.colActions")}</Th>
+                    {canDelete && <Th>{t("onboarding.colActions")}</Th>}
                   </tr>
                 </thead>
                 <tbody>
                   {filtered.length === 0 ? (
                     <tr>
                       <td
-                        colSpan={9}
+                        colSpan={canDelete ? 9 : 8}
                         className="px-4 py-10 text-center text-sm text-muted"
                       >
                         {t("onboarding.noResults")}
@@ -271,20 +284,22 @@ export function UsersContent({
                             {t(STATUS_LABEL[u.status])}
                           </span>
                         </td>
-                        <td className="px-4 py-3">
-                          <button
-                            type="button"
-                            onClick={() => setDeleteTarget(u)}
-                            aria-label={t("onboarding.delete")}
-                            title={t("onboarding.delete")}
-                            className="inline-flex items-center gap-1 rounded-md border border-line px-2 py-1 text-xs font-medium text-danger hover:border-danger/40 hover:bg-danger/10"
-                          >
-                            <Trash2 className="size-3.5" />
-                            <span className="hidden sm:inline">
-                              {t("onboarding.delete")}
-                            </span>
-                          </button>
-                        </td>
+                        {canDelete && (
+                          <td className="px-4 py-3">
+                            <button
+                              type="button"
+                              onClick={() => setDeleteTarget(u)}
+                              aria-label={t("onboarding.delete")}
+                              title={t("onboarding.delete")}
+                              className="inline-flex items-center gap-1 rounded-md border border-line px-2 py-1 text-xs font-medium text-danger hover:border-danger/40 hover:bg-danger/10"
+                            >
+                              <Trash2 className="size-3.5" />
+                              <span className="hidden sm:inline">
+                                {t("onboarding.delete")}
+                              </span>
+                            </button>
+                          </td>
+                        )}
                       </tr>
                     ))
                   )}
@@ -307,6 +322,7 @@ export function UsersContent({
           courseOptions={courseOptions}
           classOptions={classOptions}
           batchOptions={batchOptions}
+          assignableRoles={assignableRoles}
           onClose={() => setDrawerOpen(false)}
           notify={notify}
         />

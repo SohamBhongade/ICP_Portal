@@ -31,10 +31,13 @@ const ADMIN_EMAIL = "admin@icp.local";
 const ADMIN_PASSWORD = "Admin@123"; // dev-only; change in production
 const ADMIN_NAME = "ICP Administrator";
 
-// --- Demo teacher & student (dev-only) ---
-const TEACHER_EMAIL = "teacher@icp.local";
-const TEACHER_PASSWORD = "Teacher@123";
-const TEACHER_NAME = "Demo Teacher";
+// --- Demo staff (dev-only): one account per non-admin staff role ---
+const STAFF_DEMOS: { email: string; password: string; name: string; role: "principle" | "office admin" | "faculty" | "staff" }[] = [
+  { email: "principle@icp.local", password: "Principle@123", name: "Demo Principle", role: "principle" },
+  { email: "officeadmin@icp.local", password: "Office@123", name: "Demo Office Admin", role: "office admin" },
+  { email: "faculty@icp.local", password: "Faculty@123", name: "Demo Faculty", role: "faculty" },
+  { email: "staff@icp.local", password: "Staff@123", name: "Demo Staff", role: "staff" },
+];
 
 const STUDENT_ID = "STU001";
 const STUDENT_PASSWORD = "Student@123";
@@ -50,10 +53,12 @@ const DROPDOWNS: Array<{
   label: string;
   sortOrder: number;
 }> = [
-  // Courses
-  { category: "course", value: "D.Pharm", label: "D.Pharm", sortOrder: 1 },
-  { category: "course", value: "B.Pharm", label: "B.Pharm", sortOrder: 2 },
-  { category: "course", value: "M.Pharm", label: "M.Pharm", sortOrder: 3 },
+  // Courses — `value` is the canonical enum (see lib/courses.ts), `label` is the
+  // human-friendly display. Keeping the stored value canonical means CSV import,
+  // manual create, and attendance/fees roster filters all match on the same key.
+  { category: "course", value: "D.pharm", label: "D.Pharm", sortOrder: 1 },
+  { category: "course", value: "B.pharm", label: "B.Pharm", sortOrder: 2 },
+  { category: "course", value: "M.pharm", label: "M.Pharm", sortOrder: 3 },
   // Classes
   { category: "class", value: "First Year", label: "First Year", sortOrder: 1 },
   { category: "class", value: "Second Year", label: "Second Year", sortOrder: 2 },
@@ -88,25 +93,27 @@ async function seedAdmin() {
 }
 
 async function seedDemoUsers() {
-  // Teacher (logs in with email).
-  const teacherHash = await bcrypt.hash(TEACHER_PASSWORD, 10);
-  const teacher = await db
-    .insert(users)
-    .values({
-      fullName: TEACHER_NAME,
-      email: TEACHER_EMAIL,
-      passwordHash: teacherHash,
-      role: "teacher",
-      status: "active",
-      preferredLanguage: "en",
-    })
-    .onConflictDoNothing({ target: users.email })
-    .returning({ id: users.id });
-  console.log(
-    teacher.length > 0
-      ? `  ✓ Teacher created (id=${teacher[0].id})`
-      : "  • Teacher already exists — left untouched",
-  );
+  // One demo account per staff role (all log in with email).
+  for (const s of STAFF_DEMOS) {
+    const passwordHash = await bcrypt.hash(s.password, 10);
+    const row = await db
+      .insert(users)
+      .values({
+        fullName: s.name,
+        email: s.email,
+        passwordHash,
+        role: s.role,
+        status: "active",
+        preferredLanguage: "en",
+      })
+      .onConflictDoNothing({ target: users.email })
+      .returning({ id: users.id });
+    console.log(
+      row.length > 0
+        ? `  ✓ ${s.name} (${s.role}) created (id=${row[0].id})`
+        : `  • ${s.name} (${s.role}) already exists — left untouched`,
+    );
+  }
 
   // Student (logs in with student ID).
   const studentHash = await bcrypt.hash(STUDENT_PASSWORD, 10);
@@ -118,7 +125,7 @@ async function seedDemoUsers() {
       passwordHash: studentHash,
       role: "student",
       status: "active",
-      course: "D.Pharm",
+      course: "D.pharm",
       className: "First Year",
       practicalBatch: "Batch A",
       preferredLanguage: "en",
@@ -179,7 +186,9 @@ async function main() {
   console.log("\n────────────────────────────────────────");
   console.log("Seed complete. Dev login credentials:");
   console.log(`  Admin   (staff):   ${ADMIN_EMAIL} / ${ADMIN_PASSWORD}`);
-  console.log(`  Teacher (staff):   ${TEACHER_EMAIL} / ${TEACHER_PASSWORD}`);
+  for (const s of STAFF_DEMOS) {
+    console.log(`  ${s.role.padEnd(13)}(staff):  ${s.email} / ${s.password}`);
+  }
   console.log(`  Student:           ${STUDENT_ID} / ${STUDENT_PASSWORD}`);
   console.log("  (Change these passwords in production.)");
   console.log("────────────────────────────────────────");

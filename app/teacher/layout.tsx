@@ -1,6 +1,8 @@
-// Teacher area layout — role-guarded (admins allowed too, per proxy rules).
+// Attendance recorder console — guarded by the `attendance` capability
+// (admin, principle, faculty, staff). Formerly the "teacher" area.
 
-import { requireRole } from "@/lib/auth";
+import { requireCapability } from "@/lib/auth";
+import { can, type Role } from "@/lib/auth/permissions";
 import { getEditMode } from "@/lib/edit-mode/settings";
 import { DashboardShell } from "@/components/layout/DashboardShell";
 import { EditModeProvider } from "@/components/edit-mode/EditModeProvider";
@@ -11,12 +13,13 @@ export default async function TeacherLayout({
   children: React.ReactNode;
 }) {
   const [user, editMode] = await Promise.all([
-    requireRole("teacher", "admin"),
+    requireCapability("attendance"),
     getEditMode(),
   ]);
+  const canEdit = can(user.role as Role, "settings");
   return (
-    <EditModeProvider canEdit={user.role === "admin"} initialEditMode={editMode}>
-      <DashboardShell role="teacher" user={{ name: user.fullName }}>
+    <EditModeProvider canEdit={canEdit} initialEditMode={editMode}>
+      <DashboardShell role={user.role as Role} user={{ name: user.fullName }}>
         {children}
       </DashboardShell>
     </EditModeProvider>

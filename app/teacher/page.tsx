@@ -6,12 +6,12 @@
 import { and, eq, gte, lte } from "drizzle-orm";
 import { db } from "@/db";
 import { attendanceLogs } from "@/db/schema";
-import { requireRole } from "@/lib/auth";
+import { requireCapability } from "@/lib/auth";
 import { weekBounds } from "@/lib/dates";
 import { TeacherOverview } from "./TeacherOverview";
 
 export default async function TeacherDashboardPage() {
-  const teacher = await requireRole("teacher", "admin");
+  const teacher = await requireCapability("attendance");
   const { start, end } = weekBounds();
 
   const sessions = await db

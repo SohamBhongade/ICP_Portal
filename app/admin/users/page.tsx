@@ -7,10 +7,13 @@
 import { desc } from "drizzle-orm";
 import { db } from "@/db";
 import { users } from "@/db/schema";
+import { requireCapability } from "@/lib/auth";
+import { assignableRoles, can, type Role } from "@/lib/auth/permissions";
 import { getDropdownOptions } from "@/lib/edit-mode/settings";
 import { UsersContent } from "./UsersContent";
 
 export default async function UsersPage() {
+  const me = await requireCapability("manageUsers");
   const [rows, courseOpts, classOpts, batchOpts] = await Promise.all([
     db
       .select({
@@ -40,6 +43,8 @@ export default async function UsersPage() {
       courseOptions={toItems(courseOpts)}
       classOptions={toItems(classOpts)}
       batchOptions={toItems(batchOpts)}
+      canDelete={can(me.role as Role, "deleteUsers")}
+      assignableRoles={assignableRoles(me.role as Role)}
     />
   );
 }

@@ -20,18 +20,31 @@ import {
   type ActionError,
   type OnboardRole,
 } from "@/app/actions/onboarding";
+import type { Role } from "@/lib/auth/permissions";
 import type { ToastKind } from "./UsersContent";
+
+// Translation keys per role (mirrors ROLE_LABEL in UsersContent).
+const ROLE_LABEL_KEY: Record<Role, string> = {
+  admin: "onboarding.roleAdmin",
+  principle: "onboarding.rolePrinciple",
+  "office admin": "onboarding.roleOfficeAdmin",
+  faculty: "onboarding.roleFaculty",
+  staff: "onboarding.roleStaff",
+  student: "onboarding.roleStudent",
+};
 
 export function CreateUserDrawer({
   courseOptions,
   classOptions,
   batchOptions,
+  assignableRoles,
   onClose,
   notify,
 }: {
   courseOptions: DropdownOptionItem[];
   classOptions: DropdownOptionItem[];
   batchOptions: DropdownOptionItem[];
+  assignableRoles: Role[];
   onClose: () => void;
   notify: (kind: ToastKind, message: string) => void;
 }) {
@@ -40,7 +53,10 @@ export function CreateUserDrawer({
   const [pending, startTransition] = useTransition();
   const [error, setError] = useState<ActionError | null>(null);
 
-  const [role, setRole] = useState<OnboardRole>("student");
+  // Default to student when allowed, else the first assignable role.
+  const [role, setRole] = useState<OnboardRole>(
+    assignableRoles.includes("student") ? "student" : assignableRoles[0],
+  );
   const [fullName, setFullName] = useState("");
   const [email, setEmail] = useState("");
   const [phone, setPhone] = useState("");
@@ -117,9 +133,11 @@ export function CreateUserDrawer({
               onChange={(e) => setRole(e.target.value as OnboardRole)}
               className="w-full rounded-md border border-line bg-surface px-3 py-2 text-sm text-ink focus:border-teal"
             >
-              <option value="student">{t("onboarding.roleStudent")}</option>
-              <option value="teacher">{t("onboarding.roleTeacher")}</option>
-              <option value="admin">{t("onboarding.roleAdmin")}</option>
+              {assignableRoles.map((r) => (
+                <option key={r} value={r}>
+                  {t(ROLE_LABEL_KEY[r])}
+                </option>
+              ))}
             </select>
           </Field>
 

@@ -2,8 +2,9 @@
 
 // Phase 9 — Attendance server actions.
 //
-// Both entry points are gated by requireRole("teacher", "admin") — a strict
-// server-side role check (redirects anyone else). Students never reach these.
+// Both entry points are gated by requireCapability("attendance") — a strict
+// server-side check (admin, principle, faculty, staff). Students never reach
+// these.
 //
 //   - fetchStudentsAction:     dynamic roster for a course/class/(batch)
 //   - submitAttendanceAction:  bulk-write present/absent rows for one session
@@ -16,7 +17,7 @@ import { and, asc, eq, isNull } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import { db } from "@/db";
 import { attendanceLogs, users } from "@/db/schema";
-import { requireRole } from "@/lib/auth";
+import { requireCapability } from "@/lib/auth";
 
 export type RosterStudent = {
   id: number;
@@ -31,7 +32,7 @@ export async function fetchStudentsAction(filters: {
   className: string;
   practicalBatch?: string;
 }): Promise<RosterStudent[]> {
-  await requireRole("teacher", "admin");
+  await requireCapability("attendance");
 
   const course = filters.course?.trim();
   const className = filters.className?.trim();
@@ -73,7 +74,7 @@ export type SubmitResult =
 export async function submitAttendanceAction(
   input: SubmitAttendanceInput,
 ): Promise<SubmitResult> {
-  const marker = await requireRole("teacher", "admin");
+  const marker = await requireCapability("attendance");
 
   const date = input.date?.trim();
   const subject = input.subject?.trim() || null;

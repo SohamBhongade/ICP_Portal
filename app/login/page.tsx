@@ -1,21 +1,19 @@
 "use client";
 
 // Login screen. Single form with a student/staff toggle: students sign in with
-// their Student ID, staff (teacher/admin) with email. The language switcher is
-// prominent at the top. Errors come back as codes and are translated via useT().
+// their Student ID, staff with email. Errors come back as codes and are
+// translated via useT().
 
 import { useActionState, useState } from "react";
 import Link from "next/link";
 import { Eye, EyeOff } from "lucide-react";
-import { LanguageSwitcher } from "@/components/i18n/LanguageSwitcher";
-import { useLocale, useT } from "@/components/i18n/LanguageProvider";
+import { useT } from "@/components/i18n/LanguageProvider";
 import { loginAction, type LoginState } from "@/app/actions/auth";
 
 const initialState: LoginState = { error: null };
 
 export default function LoginPage() {
   const t = useT();
-  const { locale } = useLocale();
   const [mode, setMode] = useState<"student" | "staff">("student");
   const [showPassword, setShowPassword] = useState(false);
   const [state, formAction, pending] = useActionState(loginAction, initialState);
@@ -23,7 +21,7 @@ export default function LoginPage() {
   return (
     <main className="flex min-h-dvh flex-col items-center justify-center bg-canvas px-4 py-10">
       <div className="w-full max-w-md">
-        {/* Brand + prominent language switcher */}
+        {/* Brand */}
         <div className="mb-6 flex flex-col items-center gap-4 text-center">
           <div>
             <h1 className="text-2xl font-semibold text-ink">
@@ -31,7 +29,6 @@ export default function LoginPage() {
             </h1>
             <p className="mt-1 text-sm text-muted">{t("common.collegeName")}</p>
           </div>
-          <LanguageSwitcher />
         </div>
 
         <div className="rounded-lg border border-line bg-surface p-6 shadow-sm sm:p-8">
@@ -64,7 +61,7 @@ export default function LoginPage() {
 
           <form action={formAction} className="mt-5 space-y-4">
             <input type="hidden" name="mode" value={mode} />
-            <input type="hidden" name="locale" value={locale} />
+            <input type="hidden" name="locale" value="en" />
 
             <div>
               <label

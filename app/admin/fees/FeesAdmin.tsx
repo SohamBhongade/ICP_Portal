@@ -298,11 +298,13 @@ function LedgerTable({ rows }: { rows: LedgerRow[] }) {
 const CHARGE_OPTS = [
   { value: "Tuition fee", key: "fees.cat.tuition" },
   { value: "Library fee", key: "fees.cat.library" },
+  { value: "Development fees", key: "fees.cat.development" },
   { value: "Other charge", key: "fees.cat.otherCharge" },
 ];
 const PAYMENT_OPTS = [
   { value: "Cash payment", key: "fees.cat.cash" },
   { value: "Online payment", key: "fees.cat.online" },
+  { value: "Scholarship (fund)", key: "fees.cat.scholarship" },
   { value: "Other payment", key: "fees.cat.otherPayment" },
 ];
 

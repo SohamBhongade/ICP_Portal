@@ -15,12 +15,13 @@ import {
   rejectRequestAction,
   type ActionError,
 } from "@/app/actions/onboarding";
+import type { Role } from "@/lib/auth/permissions";
 
 type Item = { value: string; label: string };
 
 export type PendingRequest = {
   id: number;
-  role: "admin" | "teacher" | "student";
+  role: Role;
   fullName: string;
   studentId: string | null;
   email: string | null;

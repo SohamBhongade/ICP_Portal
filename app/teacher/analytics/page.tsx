@@ -8,7 +8,7 @@
 import { and, asc, eq, sql } from "drizzle-orm";
 import { db } from "@/db";
 import { attendanceLogs, users } from "@/db/schema";
-import { requireRole } from "@/lib/auth";
+import { requireCapability } from "@/lib/auth";
 import {
   TeacherAnalytics,
   type ClassRate,
@@ -20,7 +20,7 @@ const sessionKey = sql`${attendanceLogs.date} || '|' || coalesce(${attendanceLog
 const presentSum = sql<number>`coalesce(sum(case when ${attendanceLogs.status} in ('present', 'late') then 1 else 0 end), 0)`;
 
 export default async function TeacherAnalyticsPage() {
-  const me = await requireRole("teacher", "admin");
+  const me = await requireCapability("attendance");
 
   const [byClass, byDate, totalSessions, yourSessions, activeStudents] =
     await Promise.all([

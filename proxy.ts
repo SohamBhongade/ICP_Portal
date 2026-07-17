@@ -6,15 +6,8 @@
 // server-side in every mutation (see guardrails).
 
 import { NextResponse, type NextRequest } from "next/server";
-import { SESSION_COOKIE, verifySessionToken, type Role } from "@/lib/auth/session";
-
-// Path prefix -> roles allowed to access it.
-const ROLE_RULES: { prefix: string; roles: Role[] }[] = [
-  { prefix: "/admin", roles: ["admin"] },
-  { prefix: "/teacher", roles: ["teacher", "admin"] },
-  { prefix: "/student", roles: ["student", "admin"] },
-  // /dashboard: any authenticated user (no role restriction)
-];
+import { SESSION_COOKIE, verifySessionToken } from "@/lib/auth/session";
+import { canAccessPath, landingPath } from "@/lib/auth/permissions";
 
 export async function proxy(request: NextRequest) {
   const { pathname } = request.nextUrl;
@@ -36,10 +29,11 @@ export async function proxy(request: NextRequest) {
     return NextResponse.redirect(loginUrl);
   }
 
-  // Role-specific gating.
-  const rule = ROLE_RULES.find((r) => pathname.startsWith(r.prefix));
-  if (rule && !rule.roles.includes(session.role)) {
-    return NextResponse.redirect(new URL("/dashboard", request.url));
+  // Capability-based gating (shared model in lib/auth/permissions). If the role
+  // can't access this path, bounce to ITS OWN landing page rather than a generic
+  // /dashboard, so mixed staff roles never bounce-loop.
+  if (!canAccessPath(session.role, pathname)) {
+    return NextResponse.redirect(new URL(landingPath(session.role), request.url));
   }
 
   return NextResponse.next();

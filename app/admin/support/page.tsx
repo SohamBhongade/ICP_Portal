@@ -3,9 +3,11 @@
 import { desc, eq } from "drizzle-orm";
 import { db } from "@/db";
 import { supportTickets, users } from "@/db/schema";
+import { requireCapability } from "@/lib/auth";
 import { AdminSupport, type AdminTicket } from "./AdminSupport";
 
 export default async function AdminSupportPage() {
+  await requireCapability("settings");
   const rows = await db
     .select({
       id: supportTickets.id,

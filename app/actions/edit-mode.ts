@@ -1,27 +1,27 @@
 "use server";
 
-// Edit Mode mutations. EVERY action re-verifies the caller is an admin on the
-// server — never trust the client for these writes (guardrail).
+// Edit Mode mutations. EVERY action re-verifies the caller holds the `settings`
+// capability on the server — never trust the client for these writes (guardrail).
 
 import { and, eq } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import { db } from "@/db";
 import { appSettings, dropdownOptions, textOverrides } from "@/db/schema";
-import { getCurrentUser } from "@/lib/auth";
+import { currentUserWithCapability } from "@/lib/auth";
 import { EDIT_MODE_KEY, type DropdownCategory } from "@/lib/edit-mode/settings";
 import { isLocale } from "@/lib/i18n/config";
 
-async function assertAdmin() {
-  const user = await getCurrentUser();
-  if (!user || user.role !== "admin") {
-    throw new Error("Forbidden: admin only.");
+async function assertSettings() {
+  const user = await currentUserWithCapability("settings");
+  if (!user) {
+    throw new Error("Forbidden: settings capability required.");
   }
   return user;
 }
 
 /** Turn global Edit Mode on/off (stored in app_settings). */
 export async function setEditModeAction(next: boolean): Promise<void> {
-  await assertAdmin();
+  await assertSettings();
   await db
     .insert(appSettings)
     .values({ key: EDIT_MODE_KEY, value: String(next), updatedAt: new Date() })
@@ -42,7 +42,7 @@ export async function saveTextOverrideAction(
   key: string,
   value: string,
 ): Promise<void> {
-  await assertAdmin();
+  await assertSettings();
   if (!isLocale(locale) || !key) throw new Error("Invalid override target.");
 
   await db
@@ -62,7 +62,7 @@ export async function addDropdownOptionAction(
   value: string,
   label: string,
 ): Promise<void> {
-  await assertAdmin();
+  await assertSettings();
   const v = value.trim();
   const l = label.trim() || v;
   if (!v) throw new Error("Option value is required.");
@@ -75,7 +75,7 @@ export async function addDropdownOptionAction(
 
 /** Soft-delete a dropdown option (deactivate, preserving history). */
 export async function deleteDropdownOptionAction(id: number): Promise<void> {
-  await assertAdmin();
+  await assertSettings();
   await db
     .update(dropdownOptions)
     .set({ isActive: false })

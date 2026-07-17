@@ -8,11 +8,14 @@
 // Token format:  base64url(JSON payload) + "." + base64url(HMAC-SHA256 sig)
 
 import type { Locale } from "@/lib/i18n/config";
+import type { Role } from "./permissions";
+
+// Re-export so existing `import { type Role } from "@/lib/auth/session"` callers
+// keep working; the canonical definition now lives in ./permissions.
+export type { Role };
 
 export const SESSION_COOKIE = "icp_session";
 export const SESSION_MAX_AGE_SECONDS = 60 * 60 * 24 * 7; // 7 days
-
-export type Role = "admin" | "teacher" | "student";
 
 export type SessionPayload = {
   userId: number;
