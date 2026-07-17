@@ -26,7 +26,12 @@ import {
   type LedgerResult,
   type LedgerStudent,
 } from "@/app/actions/fees";
-import { formatCurrency, type LedgerRow, type LedgerType } from "@/lib/fees";
+import {
+  balanceToneClass,
+  formatCurrency,
+  type LedgerRow,
+  type LedgerType,
+} from "@/lib/fees";
 
 type Student = {
   id: number;
@@ -190,6 +195,7 @@ export function FeesAdmin({ students }: { students: Student[] }) {
                     label={t("fees.outstanding")}
                     value={formatCurrency(ledger.balances.balance)}
                     icon={Wallet}
+                    valueClassName={balanceToneClass(ledger.balances.balance)}
                   />
                 </div>
               )}
@@ -237,7 +243,7 @@ function LedgerTable({ rows }: { rows: LedgerRow[] }) {
   const t = useT();
   // Running outstanding balance, computed in chronological order as a cumulative
   // sum (no render-scope mutation, per react-hooks/immutability).
-  const signed = (r: LedgerRow) => (r.type === "charge" ? r.amount : -r.amount);
+  const signed = (r: LedgerRow) => (r.type === "payment" ? r.amount : -r.amount);
   const withBalance = rows.map((r, i) => ({
     row: r,
     balance: rows.slice(0, i + 1).reduce((sum, x) => sum + signed(x), 0),
@@ -276,7 +282,9 @@ function LedgerTable({ rows }: { rows: LedgerRow[] }) {
               <td className="px-4 py-3 text-right tabular-nums text-teal">
                 {row.type === "payment" ? formatCurrency(row.amount) : "—"}
               </td>
-              <td className="px-4 py-3 text-right font-medium tabular-nums text-ink">
+              <td
+                className={`px-4 py-3 text-right font-medium tabular-nums ${balanceToneClass(balance)}`}
+              >
                 {formatCurrency(balance)}
               </td>
             </tr>

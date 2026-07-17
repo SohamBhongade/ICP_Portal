@@ -1,7 +1,7 @@
 // Student Fee Balance (Phase 10).
 //
 // Server component: pulls this student's own ledger, computes balances on the
-// server (charges − payments), and renders the read-only StatCard dashboard +
+// server (payments − charges), and renders the read-only StatCard dashboard +
 // transaction history. Students can never mutate the ledger.
 
 import { asc, eq } from "drizzle-orm";

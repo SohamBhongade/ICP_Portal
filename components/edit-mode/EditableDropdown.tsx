@@ -19,6 +19,16 @@ import type { DropdownCategory } from "@/lib/edit-mode/settings";
 
 export type DropdownOptionItem = { id: number; value: string; label: string };
 
+// Derive a stable machine value from the human-friendly name the admin types,
+// so non-technical staff never see the underlying DB value.
+// e.g. "B.Pharm" → "b_pharm", "First Year" → "first_year", "Batch C" → "batch_c".
+const toValue = (label: string) =>
+  label
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, "_")
+    .replace(/[^a-z0-9_]/g, "");
+
 export function EditableDropdown({
   category,
   options,
@@ -46,8 +56,7 @@ export function EditableDropdown({
   const { editing } = useEditMode();
   const router = useRouter();
   const [pending, startTransition] = useTransition();
-  const [newValue, setNewValue] = useState("");
-  const [newLabel, setNewLabel] = useState("");
+  const [newName, setNewName] = useState("");
 
   const selectProps =
     value !== undefined
@@ -55,11 +64,13 @@ export function EditableDropdown({
       : { defaultValue, onChange: (e: React.ChangeEvent<HTMLSelectElement>) => onChange?.(e.target.value) };
 
   const add = () => {
-    if (!newValue.trim()) return;
+    const label = newName.trim();
+    const value = toValue(label);
+    // Guard: label must be non-empty and yield at least one usable value char.
+    if (!label || !value) return;
     startTransition(async () => {
-      await addDropdownOptionAction(category, newValue, newLabel);
-      setNewValue("");
-      setNewLabel("");
+      await addDropdownOptionAction(category, value, label);
+      setNewName("");
       router.refresh();
     });
   };
@@ -114,15 +125,15 @@ export function EditableDropdown({
           </ul>
           <div className="flex flex-wrap items-center gap-2">
             <input
-              value={newValue}
-              onChange={(e) => setNewValue(e.target.value)}
-              placeholder={t("editMode.valuePlaceholder")}
-              className="min-w-0 flex-1 rounded-md border border-line bg-surface px-2 py-1 text-sm text-ink focus:border-teal"
-            />
-            <input
-              value={newLabel}
-              onChange={(e) => setNewLabel(e.target.value)}
-              placeholder={t("editMode.labelPlaceholder")}
+              value={newName}
+              onChange={(e) => setNewName(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") {
+                  e.preventDefault();
+                  add();
+                }
+              }}
+              placeholder={t(`editMode.namePlaceholder.${category}`)}
               className="min-w-0 flex-1 rounded-md border border-line bg-surface px-2 py-1 text-sm text-ink focus:border-teal"
             />
             <button

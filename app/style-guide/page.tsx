@@ -10,7 +10,6 @@ import {
   Users,
   CalendarCheck,
   Wallet,
-  Megaphone,
   LifeBuoy,
   CheckCircle2,
   XCircle,
@@ -22,7 +21,6 @@ const navItems: NavItem[] = [
   { href: "/style-guide/users", label: "Users", icon: Users },
   { href: "/style-guide/attendance", label: "Attendance", icon: CalendarCheck },
   { href: "/style-guide/fees", label: "Fees", icon: Wallet },
-  { href: "/style-guide/circulars", label: "Circulars", icon: Megaphone },
   { href: "/style-guide/support", label: "Support", icon: LifeBuoy },
 ];
 

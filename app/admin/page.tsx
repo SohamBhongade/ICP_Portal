@@ -9,14 +9,13 @@ import { db } from "@/db";
 import { feeLedgers, supportTickets, users } from "@/db/schema";
 import { requireRole } from "@/lib/auth";
 import { monthBounds } from "@/lib/dates";
-import { getRecentCirculars } from "@/lib/circulars";
 import { AdminOverview } from "./AdminOverview";
 
 export default async function AdminDashboardPage() {
   await requireRole("admin");
   const { start, end } = monthBounds();
 
-  const [students, openTickets, payments, circulars] = await Promise.all([
+  const [students, openTickets, payments] = await Promise.all([
     db
       .select({ id: users.id })
       .from(users)
@@ -35,7 +34,6 @@ export default async function AdminDashboardPage() {
           lte(feeLedgers.date, end),
         ),
       ),
-    getRecentCirculars(),
   ]);
 
   const feesThisMonth = payments.reduce((sum, p) => sum + p.amount, 0);
@@ -45,7 +43,6 @@ export default async function AdminDashboardPage() {
       activeStudents={students.length}
       pendingTickets={openTickets.length}
       feesThisMonth={feesThisMonth}
-      circulars={circulars}
     />
   );
 }

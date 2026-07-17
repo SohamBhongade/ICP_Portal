@@ -18,8 +18,13 @@
     "on": "चालू",
     "off": "बंद",
     "addOption": "जोड़ें",
-    "valuePlaceholder": "मान",
-    "labelPlaceholder": "लेबल"
+    "namePlaceholder": {
+      "course": "उदा. B.Pharm",
+      "semester": "उदा. First Year",
+      "subject": "उदा. Pharmaceutics",
+      "class": "उदा. Batch C",
+      "practical_batch": "उदा. Batch C"
+    }
   },
   "settings": {
     "editableText": "संपादन योग्य पाठ (डेमो)",
@@ -40,7 +45,6 @@
     "users": "उपयोगकर्ता",
     "attendance": "उपस्थिति",
     "fees": "शुल्क",
-    "circulars": "परिपत्र",
     "support": "सहायता",
     "settings": "सेटिंग्स",
     "analytics": "विश्लेषण"
@@ -52,7 +56,6 @@
     "statTotalStudents": "कुल छात्र",
     "statPendingRequests": "लंबित अनुरोध",
     "statOpenTickets": "खुले टिकट",
-    "statCirculars": "परिपत्र",
     "statAttendanceRate": "उपस्थिति दर",
     "statFeeBalance": "शुल्क शेष",
     "statActiveStudents": "सक्रिय छात्र",
@@ -94,6 +97,8 @@
     "statusRejected": "अस्वीकृत",
     "noResults": "आपके फ़िल्टर से कोई उपयोगकर्ता मेल नहीं खाता।",
     "showing": "{total} में से {count} उपयोगकर्ता दिखाए जा रहे हैं",
+    "resultsCountSingular": "1 उपयोगकर्ता मिला",
+    "resultsCountPlural": "{count} उपयोगकर्ता मिले",
     "create": {
       "title": "नया उपयोगकर्ता जोड़ें",
       "roleLabel": "खाता प्रकार",
@@ -272,52 +277,6 @@
       "outstanding": "बकाया राशि",
       "historyTitle": "लेन-देन इतिहास",
       "empty": "अभी तक कोई शुल्क लेन-देन नहीं।"
-    }
-  },
-  "circulars": {
-    "title": "परिपत्र",
-    "subtitle": "कॉलेज की सूचनाएँ, समय-सारिणी और दस्तावेज़।",
-    "compose": {
-      "title": "परिपत्र प्रकाशित करें",
-      "subtitle": "छात्रों के साथ सूचना, PDF या छवि साझा करें।",
-      "titleLabel": "शीर्षक",
-      "titlePlaceholder": "जैसे मध्यावधि परीक्षा समय-सारिणी",
-      "descriptionLabel": "विवरण",
-      "descriptionPlaceholder": "वैकल्पिक विवरण",
-      "fileLabel": "संलग्नक",
-      "fileHint": "PDF या छवि फ़ाइल।",
-      "choose": "फ़ाइल चुनें",
-      "noFile": "कोई फ़ाइल नहीं चुनी गई",
-      "publish": "प्रकाशित करें",
-      "publishing": "प्रकाशित हो रहा है…"
-    },
-    "board": {
-      "title": "सूचना पट्ट",
-      "empty": "अभी तक कोई परिपत्र प्रकाशित नहीं हुआ।",
-      "view": "देखें / डाउनलोड करें",
-      "postedOn": "{date} को पोस्ट किया गया",
-      "by": "{name} द्वारा",
-      "delete": "हटाएँ",
-      "confirmDelete": "इस परिपत्र को हटाएँ?"
-    },
-    "type": {
-      "pdf": "PDF",
-      "image": "छवि"
-    },
-    "recent": {
-      "title": "हाल के परिपत्र",
-      "empty": "अभी तक कोई परिपत्र नहीं।",
-      "view": "देखें"
-    },
-    "toast": {
-      "published": "परिपत्र प्रकाशित किया गया।",
-      "deleted": "परिपत्र हटा दिया गया।",
-      "needTitle": "कृपया एक शीर्षक जोड़ें।",
-      "needFile": "कृपया संलग्न करने के लिए एक फ़ाइल चुनें।",
-      "forbidden": "आपको प्रकाशित करने की अनुमति नहीं है।",
-      "unconfigured": "फ़ाइल अपलोड कॉन्फ़िगर नहीं है। कृपया व्यवस्थापक से संपर्क करें।",
-      "uploadFailed": "अपलोड विफल। कृपया पुनः प्रयास करें।",
-      "failed": "कुछ गलत हुआ। कृपया पुनः प्रयास करें।"
     }
   },
   "support": {

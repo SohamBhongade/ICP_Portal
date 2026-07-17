@@ -18,7 +18,11 @@ import { StatCard } from "@/components/ui/StatCard";
 import { Editable } from "@/components/edit-mode/Editable";
 import { useT, useLocale } from "@/components/i18n/LanguageProvider";
 
-type Log = { date: string; status: "present" | "absent"; subject: string | null };
+type Log = {
+  date: string;
+  status: "present" | "absent" | "late";
+  subject: string | null;
+};
 
 const pad = (n: number) => String(n).padStart(2, "0");
 
@@ -79,7 +83,7 @@ export function StudentAttendanceView({
   );
 }
 
-type DayInfo = { present: number; absent: number };
+type DayInfo = { present: number; absent: number; late: number };
 
 function AttendanceCalendar({ logs }: { logs: Log[] }) {
   const t = useT();
@@ -89,9 +93,8 @@ function AttendanceCalendar({ logs }: { logs: Log[] }) {
   const byDay = useMemo(() => {
     const map = new Map<string, DayInfo>();
     for (const l of logs) {
-      const info = map.get(l.date) ?? { present: 0, absent: 0 };
-      if (l.status === "present") info.present += 1;
-      else info.absent += 1;
+      const info = map.get(l.date) ?? { present: 0, absent: 0, late: 0 };
+      info[l.status] += 1;
       map.set(l.date, info);
     }
     return map;
@@ -172,13 +175,16 @@ function AttendanceCalendar({ logs }: { logs: Log[] }) {
           const info = byDay.get(key);
           let tone = "bg-canvas text-muted";
           if (info) {
+            // Severity priority: any absence > any lateness > all present.
             tone =
               info.absent > 0
                 ? "bg-lavender font-semibold text-primary"
-                : "bg-mint font-semibold text-teal";
+                : info.late > 0
+                  ? "bg-warning/20 font-semibold text-warning"
+                  : "bg-mint font-semibold text-teal";
           }
           const title = info
-            ? `${t("attendance.present")}: ${info.present} · ${t("attendance.absent")}: ${info.absent}`
+            ? `${t("attendance.present")}: ${info.present} · ${t("attendance.absent")}: ${info.absent} · ${t("attendance.late")}: ${info.late}`
             : undefined;
           return (
             <div
@@ -201,6 +207,10 @@ function AttendanceCalendar({ logs }: { logs: Log[] }) {
         <span className="inline-flex items-center gap-1.5">
           <span className="size-3 rounded-sm bg-lavender" />
           {t("attendance.student.legendAbsent")}
+        </span>
+        <span className="inline-flex items-center gap-1.5">
+          <span className="size-3 rounded-sm bg-warning/40" />
+          {t("attendance.student.legendLate")}
         </span>
         <span className="inline-flex items-center gap-1.5">
           <span className="size-3 rounded-sm border border-line bg-canvas" />

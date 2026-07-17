@@ -7,11 +7,13 @@ export function StatCard({
   value,
   icon: Icon,
   tone = "lavender",
+  valueClassName = "text-ink",
 }: {
   label: string;
   value: string;
   icon: LucideIcon;
   tone?: "lavender" | "mint";
+  valueClassName?: string;
 }) {
   const toneClasses =
     tone === "mint" ? "bg-mint text-teal" : "bg-lavender text-primary";
@@ -23,7 +25,7 @@ export function StatCard({
           <Icon className="size-4" aria-hidden />
         </span>
       </div>
-      <p className="mt-2 text-2xl font-semibold tabular-nums text-ink">
+      <p className={`mt-2 text-2xl font-semibold tabular-nums ${valueClassName}`}>
         {value}
       </p>
     </div>

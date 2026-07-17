@@ -20,6 +20,7 @@ type Item = { value: string; label: string };
 
 export type PendingRequest = {
   id: number;
+  role: "admin" | "teacher" | "student";
   fullName: string;
   studentId: string | null;
   email: string | null;
@@ -161,7 +162,10 @@ function RequestCard({
     request.practicalBatch ?? "",
   );
 
-  const canApprove = fullName.trim() !== "" && studentId.trim() !== "";
+  const isStaff = request.role !== "student";
+  const canApprove =
+    fullName.trim() !== "" &&
+    (isStaff ? email.trim() !== "" : studentId.trim() !== "");
 
   const fmtDate = (ms: number) =>
     new Date(ms).toLocaleDateString(locale, {
@@ -180,6 +184,7 @@ function RequestCard({
     startTransition(async () => {
       const result = await approveRequestAction({
         id: request.id,
+        role: request.role,
         fullName,
         studentId,
         email,
@@ -218,10 +223,21 @@ function RequestCard({
 
   return (
     <div className="rounded-lg border border-line bg-surface p-4 shadow-sm">
-      <div className="mb-3 flex items-center justify-between gap-2">
-        <span className="rounded-full bg-lavender px-2 py-0.5 text-xs font-medium text-primary">
-          {t("onboarding.statusPending")}
-        </span>
+      <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+        <div className="flex items-center gap-2">
+          <span
+            className={`rounded-full px-2 py-0.5 text-xs font-medium ${
+              isStaff ? "bg-mint text-teal" : "bg-lavender text-primary"
+            }`}
+          >
+            {isStaff
+              ? t("requests.staffRequest")
+              : t("requests.studentRequest")}
+          </span>
+          <span className="rounded-full bg-canvas px-2 py-0.5 text-xs font-medium text-muted">
+            {t("onboarding.statusPending")}
+          </span>
+        </div>
         <span className="text-xs text-muted tabular-nums">
           {t("requests.requestedOn", { date: fmtDate(request.createdAt) })}
         </span>
@@ -235,13 +251,15 @@ function RequestCard({
             className={inputClass}
           />
         </CardField>
-        <CardField label={t("requests.rollNo")}>
-          <input
-            value={studentId}
-            onChange={(e) => setStudentId(e.target.value)}
-            className={inputClass}
-          />
-        </CardField>
+        {!isStaff && (
+          <CardField label={t("requests.rollNo")}>
+            <input
+              value={studentId}
+              onChange={(e) => setStudentId(e.target.value)}
+              className={inputClass}
+            />
+          </CardField>
+        )}
         <CardField label={t("requests.email")}>
           <input
             type="email"
@@ -257,30 +275,34 @@ function RequestCard({
             className={inputClass}
           />
         </CardField>
-        <CardField label={t("requests.course")}>
-          <CardSelect
-            value={course}
-            onChange={setCourse}
-            options={courseOptions}
-            placeholder={t("requests.selectPlaceholder")}
-          />
-        </CardField>
-        <CardField label={t("requests.class")}>
-          <CardSelect
-            value={className}
-            onChange={setClassName}
-            options={classOptions}
-            placeholder={t("requests.selectPlaceholder")}
-          />
-        </CardField>
-        <CardField label={t("requests.practicalBatch")}>
-          <CardSelect
-            value={practicalBatch}
-            onChange={setPracticalBatch}
-            options={batchOptions}
-            placeholder={t("requests.selectPlaceholder")}
-          />
-        </CardField>
+        {!isStaff && (
+          <>
+            <CardField label={t("requests.course")}>
+              <CardSelect
+                value={course}
+                onChange={setCourse}
+                options={courseOptions}
+                placeholder={t("requests.selectPlaceholder")}
+              />
+            </CardField>
+            <CardField label={t("requests.class")}>
+              <CardSelect
+                value={className}
+                onChange={setClassName}
+                options={classOptions}
+                placeholder={t("requests.selectPlaceholder")}
+              />
+            </CardField>
+            <CardField label={t("requests.practicalBatch")}>
+              <CardSelect
+                value={practicalBatch}
+                onChange={setPracticalBatch}
+                options={batchOptions}
+                placeholder={t("requests.selectPlaceholder")}
+              />
+            </CardField>
+          </>
+        )}
       </div>
 
       <div className="mt-4 flex items-center justify-end gap-2 border-t border-line pt-3">

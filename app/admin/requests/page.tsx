@@ -15,6 +15,7 @@ export default async function RequestsPage() {
     db
       .select({
         id: users.id,
+        role: users.role,
         fullName: users.fullName,
         studentId: users.studentId,
         email: users.email,

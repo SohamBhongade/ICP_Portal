@@ -6,11 +6,13 @@
 // "Import CSV" modal, and a tiny toast queue shared by both flows. All visible
 // strings go through useT()/<Editable> so they honor Edit Mode text overrides.
 
-import { useEffect, useMemo, useState } from "react";
-import { Plus, Search, Upload, X } from "lucide-react";
+import { useEffect, useMemo, useState, useTransition } from "react";
+import { useRouter } from "next/navigation";
+import { Plus, Search, Trash2, Upload, X } from "lucide-react";
 import { useT } from "@/components/i18n/LanguageProvider";
 import { Editable } from "@/components/edit-mode/Editable";
 import type { DropdownOptionItem } from "@/components/edit-mode/EditableDropdown";
+import { deleteUserAction } from "@/app/actions/onboarding";
 import { CreateUserDrawer } from "./CreateUserDrawer";
 import { CsvImport } from "./CsvImport";
 
@@ -73,6 +75,33 @@ export function UsersContent({
     setToasts((prev) => [...prev, { id: Date.now() + Math.random(), kind, message }]);
   const dismiss = (id: number) =>
     setToasts((prev) => prev.filter((x) => x.id !== id));
+
+  const router = useRouter();
+  const [deleteTarget, setDeleteTarget] = useState<UserRow | null>(null);
+  const [deleting, startDelete] = useTransition();
+
+  const confirmDelete = () => {
+    if (!deleteTarget) return;
+    const target = deleteTarget;
+    startDelete(async () => {
+      const result = await deleteUserAction(target.id);
+      if (result.ok) {
+        notify(
+          "success",
+          t("onboarding.toast.deleted", { name: target.fullName }),
+        );
+      } else {
+        notify(
+          "error",
+          result.error === "self"
+            ? t("onboarding.toast.cannotDeleteSelf")
+            : t("onboarding.toast.deleteFailed"),
+        );
+      }
+      setDeleteTarget(null);
+      router.refresh();
+    });
+  };
 
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
@@ -176,6 +205,12 @@ export function UsersContent({
             />
           </div>
 
+          <p className="mb-3 text-sm font-medium text-muted [font-variant-numeric:tabular-nums]">
+            {filtered.length === 1
+              ? t("onboarding.resultsCountSingular")
+              : t("onboarding.resultsCountPlural", { count: filtered.length })}
+          </p>
+
           <div className="overflow-hidden rounded-lg border border-line bg-surface shadow-sm">
             <div className="overflow-x-auto">
               <table className="w-full min-w-[680px] text-left text-sm">
@@ -189,13 +224,14 @@ export function UsersContent({
                     <Th>{t("onboarding.colCourse")}</Th>
                     <Th>{t("onboarding.colClass")}</Th>
                     <Th>{t("onboarding.colStatus")}</Th>
+                    <Th>{t("onboarding.colActions")}</Th>
                   </tr>
                 </thead>
                 <tbody>
                   {filtered.length === 0 ? (
                     <tr>
                       <td
-                        colSpan={8}
+                        colSpan={9}
                         className="px-4 py-10 text-center text-sm text-muted"
                       >
                         {t("onboarding.noResults")}
@@ -235,6 +271,20 @@ export function UsersContent({
                             {t(STATUS_LABEL[u.status])}
                           </span>
                         </td>
+                        <td className="px-4 py-3">
+                          <button
+                            type="button"
+                            onClick={() => setDeleteTarget(u)}
+                            aria-label={t("onboarding.delete")}
+                            title={t("onboarding.delete")}
+                            className="inline-flex items-center gap-1 rounded-md border border-line px-2 py-1 text-xs font-medium text-danger hover:border-danger/40 hover:bg-danger/10"
+                          >
+                            <Trash2 className="size-3.5" />
+                            <span className="hidden sm:inline">
+                              {t("onboarding.delete")}
+                            </span>
+                          </button>
+                        </td>
                       </tr>
                     ))
                   )}
@@ -266,6 +316,15 @@ export function UsersContent({
         <CsvImport onClose={() => setCsvOpen(false)} notify={notify} />
       )}
 
+      {deleteTarget && (
+        <DeleteConfirm
+          user={deleteTarget}
+          pending={deleting}
+          onCancel={() => setDeleteTarget(null)}
+          onConfirm={confirmDelete}
+        />
+      )}
+
       <ToastStack toasts={toasts} onDismiss={dismiss} />
     </div>
   );
@@ -273,6 +332,67 @@ export function UsersContent({
 
 function Th({ children }: { children: React.ReactNode }) {
   return <th className="whitespace-nowrap px-4 py-3 font-medium">{children}</th>;
+}
+
+/** Centered confirm dialog for the destructive delete action. */
+function DeleteConfirm({
+  user,
+  pending,
+  onCancel,
+  onConfirm,
+}: {
+  user: UserRow;
+  pending: boolean;
+  onCancel: () => void;
+  onConfirm: () => void;
+}) {
+  const t = useT();
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+      <button
+        type="button"
+        aria-label={t("common.cancel")}
+        onClick={onCancel}
+        className="absolute inset-0 bg-ink/40"
+      />
+      <div
+        role="dialog"
+        aria-modal="true"
+        className="relative w-full max-w-sm rounded-lg border border-line bg-surface p-6 shadow-xl"
+      >
+        <div className="flex items-start gap-3">
+          <span className="rounded-full bg-danger/10 p-2 text-danger">
+            <Trash2 className="size-5" aria-hidden />
+          </span>
+          <div className="min-w-0">
+            <h2 className="text-base font-semibold text-ink">
+              {t("onboarding.deleteTitle")}
+            </h2>
+            <p className="mt-1 text-sm text-muted">
+              {t("onboarding.deleteBody", { name: user.fullName })}
+            </p>
+          </div>
+        </div>
+        <div className="mt-5 flex justify-end gap-2">
+          <button
+            type="button"
+            onClick={onCancel}
+            className="rounded-md border border-line bg-surface px-4 py-2 text-sm font-medium text-ink hover:bg-lavender"
+          >
+            {t("common.cancel")}
+          </button>
+          <button
+            type="button"
+            onClick={onConfirm}
+            disabled={pending}
+            className="rounded-md bg-danger px-4 py-2 text-sm font-medium text-white hover:opacity-90 disabled:opacity-50"
+          >
+            {pending ? t("onboarding.deleting") : t("onboarding.delete")}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
 }
 
 function FilterSelect({

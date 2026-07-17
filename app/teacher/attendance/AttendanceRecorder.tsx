@@ -1,14 +1,15 @@
 "use client";
 
-// High-speed attendance grid.
+// High-speed attendance grid (three-way: Present / Absent / Late).
 //
 // Teacher picks Course / Class / Semester / Subject / Batch; the roster is
 // fetched on demand (course + class are the minimum). Each student is a single
-// 44px-min toggle row (mobile-friendly touch target) defaulting to "present",
-// with top-bar "Select all present" / "Invert selection" utilities for speed.
+// 44px-min row (mobile-friendly touch target) with a P/A/L segmented toggle,
+// defaulting to "present". The sticky top bar carries "Mark entire class …"
+// macros that set every loaded row at once before submitting.
 
 import { useEffect, useState, useTransition } from "react";
-import { Check, RotateCcw, Users, X } from "lucide-react";
+import { Check, Clock, Users, X } from "lucide-react";
 import { useT } from "@/components/i18n/LanguageProvider";
 import { Editable } from "@/components/edit-mode/Editable";
 import {
@@ -18,6 +19,7 @@ import {
 import {
   fetchStudentsAction,
   submitAttendanceAction,
+  type AttendanceStatus,
   type RosterStudent,
 } from "@/app/actions/attendance";
 
@@ -51,7 +53,8 @@ export function AttendanceRecorder({
   const [date, setDate] = useState(todayISO);
 
   const [roster, setRoster] = useState<RosterStudent[]>([]);
-  const [present, setPresent] = useState<Set<number>>(new Set());
+  // One status per student id; missing entries fall back to "present".
+  const [statuses, setStatuses] = useState<Record<number, AttendanceStatus>>({});
   const [loading, startLoading] = useTransition();
   const [submitting, startSubmit] = useTransition();
   const [toast, setToast] = useState<{ kind: "success" | "error"; msg: string } | null>(null);
@@ -65,7 +68,7 @@ export function AttendanceRecorder({
       if (!course || !className) {
         if (!cancelled) {
           setRoster([]);
-          setPresent(new Set());
+          setStatuses({});
         }
         return;
       }
@@ -76,7 +79,8 @@ export function AttendanceRecorder({
       });
       if (cancelled) return;
       setRoster(students);
-      setPresent(new Set(students.map((s) => s.id))); // default everyone present
+      // Default everyone to present.
+      setStatuses(Object.fromEntries(students.map((s) => [s.id, "present"])));
     });
     return () => {
       cancelled = true;
@@ -89,24 +93,22 @@ export function AttendanceRecorder({
     return () => clearTimeout(timer);
   }, [toast]);
 
-  const presentCount = present.size;
-  const absentCount = roster.length - presentCount;
+  let presentCount = 0;
+  let absentCount = 0;
+  let lateCount = 0;
+  for (const s of roster) {
+    const st = statuses[s.id] ?? "present";
+    if (st === "absent") absentCount += 1;
+    else if (st === "late") lateCount += 1;
+    else presentCount += 1;
+  }
 
-  const toggle = (id: number) =>
-    setPresent((prev) => {
-      const next = new Set(prev);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
-      return next;
-    });
+  const setStatus = (id: number, status: AttendanceStatus) =>
+    setStatuses((prev) => ({ ...prev, [id]: status }));
 
-  const selectAllPresent = () => setPresent(new Set(roster.map((s) => s.id)));
-  const invert = () =>
-    setPresent((prev) => {
-      const next = new Set<number>();
-      for (const s of roster) if (!prev.has(s.id)) next.add(s.id);
-      return next;
-    });
+  // Master macro: stamp every loaded row with one status.
+  const markAll = (status: AttendanceStatus) =>
+    setStatuses(Object.fromEntries(roster.map((s) => [s.id, status])));
 
   const canSubmit = roster.length > 0 && !!subject && !submitting;
 
@@ -127,7 +129,7 @@ export function AttendanceRecorder({
         practicalBatch: batch || undefined,
         records: roster.map((s) => ({
           studentId: s.id,
-          status: present.has(s.id) ? "present" : "absent",
+          status: statuses[s.id] ?? "present",
         })),
       });
       if (result.ok) {
@@ -145,6 +147,12 @@ export function AttendanceRecorder({
         });
       }
     });
+  };
+
+  const statusLabels: Record<AttendanceStatus, string> = {
+    present: t("attendance.present"),
+    absent: t("attendance.absent"),
+    late: t("attendance.late"),
   };
 
   return (
@@ -219,7 +227,7 @@ export function AttendanceRecorder({
 
       {/* Roster grid */}
       <div className="rounded-lg border border-line bg-surface shadow-sm">
-        {/* Sticky utilities top-bar */}
+        {/* Sticky utilities top-bar: summary + master macros */}
         <div className="sticky top-0 z-10 flex flex-wrap items-center justify-between gap-3 rounded-t-lg border-b border-line bg-surface/95 px-4 py-3 backdrop-blur">
           <div className="flex items-center gap-2 text-sm font-medium text-ink">
             <Users className="size-4 text-muted" />
@@ -227,25 +235,34 @@ export function AttendanceRecorder({
               ? t("attendance.summary", {
                   present: presentCount,
                   absent: absentCount,
+                  late: lateCount,
                 })
               : t("attendance.rosterCount", { count: roster.length })}
           </div>
           <div className="flex flex-wrap items-center gap-2">
             <button
               type="button"
-              onClick={selectAllPresent}
+              onClick={() => markAll("present")}
               disabled={roster.length === 0}
-              className="inline-flex min-h-11 items-center gap-1.5 rounded-md border border-line bg-surface px-3 text-sm font-medium text-ink hover:bg-mint disabled:opacity-50"
+              className="inline-flex min-h-11 items-center gap-1.5 rounded-md border border-line bg-surface px-3 text-sm font-medium text-ink hover:border-teal/40 hover:bg-mint disabled:opacity-50"
             >
-              <Check className="size-4" /> {t("attendance.selectAllPresent")}
+              <Check className="size-4 text-teal" /> {t("attendance.markAllPresent")}
             </button>
             <button
               type="button"
-              onClick={invert}
+              onClick={() => markAll("absent")}
               disabled={roster.length === 0}
-              className="inline-flex min-h-11 items-center gap-1.5 rounded-md border border-line bg-surface px-3 text-sm font-medium text-ink hover:bg-lavender disabled:opacity-50"
+              className="inline-flex min-h-11 items-center gap-1.5 rounded-md border border-line bg-surface px-3 text-sm font-medium text-ink hover:border-danger/40 hover:bg-danger/10 disabled:opacity-50"
             >
-              <RotateCcw className="size-4" /> {t("attendance.invertSelection")}
+              <X className="size-4 text-danger" /> {t("attendance.markAllAbsent")}
+            </button>
+            <button
+              type="button"
+              onClick={() => markAll("late")}
+              disabled={roster.length === 0}
+              className="inline-flex min-h-11 items-center gap-1.5 rounded-md border border-line bg-surface px-3 text-sm font-medium text-ink hover:border-warning/40 hover:bg-warning/10 disabled:opacity-50"
+            >
+              <Clock className="size-4 text-warning" /> {t("attendance.markAllLate")}
             </button>
           </div>
         </div>
@@ -266,18 +283,17 @@ export function AttendanceRecorder({
           ) : (
             <ul className="grid gap-2 sm:grid-cols-2">
               {roster.map((s) => {
-                const isPresent = present.has(s.id);
+                const st = statuses[s.id] ?? "present";
+                const accent =
+                  st === "absent"
+                    ? "border-l-4 border-l-danger"
+                    : st === "late"
+                      ? "border-l-4 border-l-warning"
+                      : "border-l-4 border-l-teal";
                 return (
                   <li key={s.id}>
-                    <button
-                      type="button"
-                      onClick={() => toggle(s.id)}
-                      aria-pressed={isPresent}
-                      className={`flex min-h-11 w-full items-center justify-between gap-3 rounded-md border px-3 py-2 text-left transition-colors ${
-                        isPresent
-                          ? "border-teal/40 bg-mint"
-                          : "border-line bg-canvas"
-                      }`}
+                    <div
+                      className={`flex min-h-11 w-full items-center justify-between gap-3 rounded-md border border-line bg-surface px-3 py-2 ${accent}`}
                     >
                       <span className="min-w-0">
                         <span className="block truncate text-sm font-medium text-ink">
@@ -289,26 +305,12 @@ export function AttendanceRecorder({
                           </span>
                         )}
                       </span>
-                      <span
-                        className={`inline-flex shrink-0 items-center gap-1 rounded-full px-2.5 py-1 text-xs font-semibold ${
-                          isPresent
-                            ? "bg-teal text-teal-foreground"
-                            : "bg-lavender text-primary"
-                        }`}
-                      >
-                        {isPresent ? (
-                          <>
-                            <Check className="size-3.5" />
-                            {t("attendance.present")}
-                          </>
-                        ) : (
-                          <>
-                            <X className="size-3.5" />
-                            {t("attendance.absent")}
-                          </>
-                        )}
-                      </span>
-                    </button>
+                      <StatusToggle
+                        value={st}
+                        onChange={(v) => setStatus(s.id, v)}
+                        labels={statusLabels}
+                      />
+                    </div>
                   </li>
                 );
               })}
@@ -344,6 +346,47 @@ export function AttendanceRecorder({
           {toast.msg}
         </div>
       )}
+    </div>
+  );
+}
+
+// P / A / L segmented control. Letters stay universal; the full localized word
+// is exposed via aria-label/title. Active state carries the semantic color:
+// teal=present, crimson=absent, amber=late.
+function StatusToggle({
+  value,
+  onChange,
+  labels,
+}: {
+  value: AttendanceStatus;
+  onChange: (v: AttendanceStatus) => void;
+  labels: Record<AttendanceStatus, string>;
+}) {
+  const opts: { v: AttendanceStatus; short: string; active: string }[] = [
+    { v: "present", short: "P", active: "bg-teal text-teal-foreground" },
+    { v: "absent", short: "A", active: "bg-danger text-white" },
+    { v: "late", short: "L", active: "bg-warning text-white" },
+  ];
+  return (
+    <div
+      role="group"
+      className="inline-flex shrink-0 overflow-hidden rounded-md border border-line"
+    >
+      {opts.map((o, i) => (
+        <button
+          key={o.v}
+          type="button"
+          onClick={() => onChange(o.v)}
+          aria-pressed={value === o.v}
+          aria-label={labels[o.v]}
+          title={labels[o.v]}
+          className={`flex min-h-11 w-11 items-center justify-center text-sm font-semibold transition-colors ${
+            i > 0 ? "border-l border-line" : ""
+          } ${value === o.v ? o.active : "bg-surface text-muted hover:bg-canvas"}`}
+        >
+          {o.short}
+        </button>
+      ))}
     </div>
   );
 }

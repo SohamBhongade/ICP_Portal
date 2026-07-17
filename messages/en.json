@@ -18,8 +18,13 @@
     "on": "On",
     "off": "Off",
     "addOption": "Add",
-    "valuePlaceholder": "Value",
-    "labelPlaceholder": "Label"
+    "namePlaceholder": {
+      "course": "e.g. B.Pharm",
+      "semester": "e.g. First Year",
+      "subject": "e.g. Pharmaceutics",
+      "class": "e.g. Batch C",
+      "practical_batch": "e.g. Batch C"
+    }
   },
   "settings": {
     "editableText": "Editable text (demo)",
@@ -40,7 +45,6 @@
     "users": "Users",
     "attendance": "Attendance",
     "fees": "Fees",
-    "circulars": "Circulars",
     "support": "Support",
     "settings": "Settings",
     "analytics": "Analytics"
@@ -52,7 +56,6 @@
     "statTotalStudents": "Total students",
     "statPendingRequests": "Pending requests",
     "statOpenTickets": "Open tickets",
-    "statCirculars": "Circulars",
     "statAttendanceRate": "Attendance rate",
     "statFeeBalance": "Fee balance",
     "statActiveStudents": "Active students",
@@ -94,6 +97,8 @@
     "statusRejected": "Rejected",
     "noResults": "No users match your filters.",
     "showing": "Showing {count} of {total} users",
+    "resultsCountSingular": "1 user found",
+    "resultsCountPlural": "{count} users found",
     "create": {
       "title": "Add a new user",
       "roleLabel": "Account type",
@@ -272,52 +277,6 @@
       "outstanding": "Outstanding balance",
       "historyTitle": "Transaction history",
       "empty": "No fee transactions yet."
-    }
-  },
-  "circulars": {
-    "title": "Circulars",
-    "subtitle": "Notices, schedules, and documents from the college.",
-    "compose": {
-      "title": "Publish a circular",
-      "subtitle": "Share a notice, PDF, or image with students.",
-      "titleLabel": "Title",
-      "titlePlaceholder": "e.g. Mid-term exam schedule",
-      "descriptionLabel": "Description",
-      "descriptionPlaceholder": "Optional details",
-      "fileLabel": "Attachment",
-      "fileHint": "PDF or image file.",
-      "choose": "Choose file",
-      "noFile": "No file selected",
-      "publish": "Publish",
-      "publishing": "Publishing…"
-    },
-    "board": {
-      "title": "Notice board",
-      "empty": "No circulars have been published yet.",
-      "view": "View / Download",
-      "postedOn": "Posted {date}",
-      "by": "by {name}",
-      "delete": "Delete",
-      "confirmDelete": "Delete this circular?"
-    },
-    "type": {
-      "pdf": "PDF",
-      "image": "Image"
-    },
-    "recent": {
-      "title": "Recent circulars",
-      "empty": "No circulars yet.",
-      "view": "View"
-    },
-    "toast": {
-      "published": "Circular published.",
-      "deleted": "Circular deleted.",
-      "needTitle": "Please add a title.",
-      "needFile": "Please choose a file to attach.",
-      "forbidden": "You don't have permission to publish.",
-      "unconfigured": "File uploads are not configured. Please contact the administrator.",
-      "uploadFailed": "Upload failed. Please try again.",
-      "failed": "Something went wrong. Please try again."
     }
   },
   "support": {

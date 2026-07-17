@@ -16,10 +16,15 @@
 //     "duplicate" error rather than throwing.
 
 import bcrypt from "bcryptjs";
-import { and, eq } from "drizzle-orm";
+import { and, eq, or } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import { db } from "@/db";
-import { users } from "@/db/schema";
+import {
+  attendanceLogs,
+  feeLedgers,
+  supportTickets,
+  users,
+} from "@/db/schema";
 import { getCurrentUser } from "@/lib/auth";
 
 export type OnboardRole = "student" | "teacher" | "admin";
@@ -216,8 +221,9 @@ export async function bulkImportStudentsAction(
 
 export type ApproveRequestInput = {
   id: number;
+  role: OnboardRole; // carried from the request row; decides which fields apply
   fullName: string;
-  studentId: string;
+  studentId?: string;
   email?: string;
   phone?: string;
   course?: string;
@@ -240,14 +246,21 @@ export async function approveRequestAction(
 ): Promise<RequestResult> {
   if (!(await assertAdmin())) return { ok: false, error: "forbidden" };
 
+  const isStaff = input.role !== "student";
   const fullName = input.fullName?.trim() ?? "";
   const studentId = input.studentId?.trim() || undefined;
   const email = input.email?.trim().toLowerCase() || undefined;
 
   if (!fullName) return { ok: false, error: "missingName" };
-  if (!studentId) return { ok: false, error: "missingRollNo" };
-  if (email && !EMAIL_RE.test(email)) {
-    return { ok: false, error: "invalidEmail" };
+  if (isStaff) {
+    // Staff sign in by email — required; roll number / academic fields cleared.
+    if (!email) return { ok: false, error: "missingEmail" };
+    if (!EMAIL_RE.test(email)) return { ok: false, error: "invalidEmail" };
+  } else {
+    if (!studentId) return { ok: false, error: "missingRollNo" };
+    if (email && !EMAIL_RE.test(email)) {
+      return { ok: false, error: "invalidEmail" };
+    }
   }
 
   try {
@@ -255,12 +268,12 @@ export async function approveRequestAction(
       .update(users)
       .set({
         fullName,
-        studentId,
+        studentId: isStaff ? null : studentId,
         email,
         phone: input.phone?.trim() || null,
-        course: input.course?.trim() || null,
-        className: input.className?.trim() || null,
-        practicalBatch: input.practicalBatch?.trim() || null,
+        course: isStaff ? null : input.course?.trim() || null,
+        className: isStaff ? null : input.className?.trim() || null,
+        practicalBatch: isStaff ? null : input.practicalBatch?.trim() || null,
         status: "active",
         updatedAt: new Date(),
       })
@@ -275,6 +288,75 @@ export async function approveRequestAction(
 
   revalidateRequestViews();
   return { ok: true };
+}
+
+// ---------- Account deletion (admin-only) ----------
+//
+// Hard-deletes a user row. FK enforcement is off on the libSQL connection, so
+// this never errors on dependent rows; any historical attendance/fee/ticket
+// rows simply become orphaned and are already skipped by the admin views that
+// join back to `users`. An admin cannot delete their own account.
+
+export type DeleteUserResult =
+  | { ok: true; message: string }
+  | { ok: false; error: "forbidden" | "self" | "notFound" | "deleteFailed" };
+
+export async function deleteUserAction(
+  userId: number,
+): Promise<DeleteUserResult> {
+  const admin = await assertAdmin();
+  if (!admin) return { ok: false, error: "forbidden" };
+  if (admin.id === userId) return { ok: false, error: "self" };
+
+  // Cascading delete: remove dependent rows (children) before the user (parent)
+  // so SQLite's FOREIGN KEY constraint is never violated.
+  let res: { id: number }[];
+  try {
+    // 1. Support tickets raised by the user.
+    await db
+      .delete(supportTickets)
+      .where(eq(supportTickets.studentId, userId));
+
+    // 2. Fee ledgers the user is a student on or recorded.
+    await db
+      .delete(feeLedgers)
+      .where(
+        or(
+          eq(feeLedgers.studentId, userId),
+          eq(feeLedgers.recordedBy, userId),
+        ),
+      );
+
+    // 3. Attendance logs for the user or that the user marked.
+    await db
+      .delete(attendanceLogs)
+      .where(
+        or(
+          eq(attendanceLogs.studentId, userId),
+          eq(attendanceLogs.markedBy, userId),
+        ),
+      );
+
+    // 4. text_overrides has no user FK — nothing to delete.
+
+    // 5. Finally the user row itself.
+    res = await db
+      .delete(users)
+      .where(eq(users.id, userId))
+      .returning({ id: users.id });
+  } catch {
+    return { ok: false, error: "deleteFailed" };
+  }
+
+  if (res.length === 0) return { ok: false, error: "notFound" };
+
+  revalidatePath("/admin/users");
+  revalidatePath("/admin/requests");
+  revalidatePath("/admin");
+  return {
+    ok: true,
+    message: "User and all related records deleted successfully.",
+  };
 }
 
 export async function rejectRequestAction(

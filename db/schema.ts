@@ -49,14 +49,16 @@ export const users = sqliteTable("users", {
     .default(sql`(unixepoch())`),
 });
 
-// ---------- Attendance (binary: present/absent only, no "late") ----------
+// ---------- Attendance (three-way: present / absent / late) ----------
+// SQLite stores this as plain text, so widening the enum needs no migration —
+// existing 'present'/'absent' rows stay valid; 'late' is simply now allowed.
 export const attendanceLogs = sqliteTable("attendance_logs", {
   id: integer("id").primaryKey({ autoIncrement: true }),
   studentId: integer("student_id")
     .notNull()
     .references(() => users.id),
   date: text("date").notNull(), // 'YYYY-MM-DD'
-  status: text("status", { enum: ["present", "absent"] }).notNull(),
+  status: text("status", { enum: ["present", "absent", "late"] }).notNull(),
   subject: text("subject"),
   className: text("class_name"),
   practicalBatch: text("practical_batch"), // null = theory/regular class
@@ -85,20 +87,6 @@ export const feeLedgers = sqliteTable("fee_ledgers", {
     .notNull()
     .default(sql`(unixepoch())`),
   updatedAt: integer("updated_at", { mode: "timestamp" })
-    .notNull()
-    .default(sql`(unixepoch())`),
-});
-
-// ---------- Circulars (files on Cloudinary, DB text-only) ----------
-export const circulars = sqliteTable("circulars", {
-  id: integer("id").primaryKey({ autoIncrement: true }),
-  title: text("title").notNull(),
-  description: text("description"),
-  fileUrl: text("file_url").notNull(),
-  fileType: text("file_type", { enum: ["pdf", "image"] }).notNull(),
-  cloudinaryPublicId: text("cloudinary_public_id"), // needed to delete later
-  uploadedBy: integer("uploaded_by").references(() => users.id),
-  createdAt: integer("created_at", { mode: "timestamp" })
     .notNull()
     .default(sql`(unixepoch())`),
 });
@@ -165,6 +153,5 @@ export type User = typeof users.$inferSelect;
 export type NewUser = typeof users.$inferInsert;
 export type AttendanceLog = typeof attendanceLogs.$inferSelect;
 export type FeeLedger = typeof feeLedgers.$inferSelect;
-export type Circular = typeof circulars.$inferSelect;
 export type SupportTicket = typeof supportTickets.$inferSelect;
 export type DropdownOption = typeof dropdownOptions.$inferSelect;

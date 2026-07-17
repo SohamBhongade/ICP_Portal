@@ -1,19 +1,15 @@
 "use client";
 
-// Teacher dashboard presentation — classes conducted this week + recent circulars.
+// Teacher dashboard presentation — classes conducted this week.
 
 import { CalendarCheck } from "lucide-react";
 import { StatCard } from "@/components/ui/StatCard";
 import { useT } from "@/components/i18n/LanguageProvider";
-import { RecentCirculars } from "@/components/circulars/RecentCirculars";
-import type { CircularItem } from "@/components/circulars/CircularsBoard";
 
 export function TeacherOverview({
   classesThisWeek,
-  circulars,
 }: {
   classesThisWeek: number;
-  circulars: CircularItem[];
 }) {
   const t = useT();
 
@@ -27,8 +23,6 @@ export function TeacherOverview({
           tone="mint"
         />
       </div>
-
-      <RecentCirculars items={circulars} />
     </div>
   );
 }

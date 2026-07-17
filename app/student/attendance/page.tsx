@@ -24,7 +24,10 @@ export default async function StudentAttendancePage() {
     .orderBy(asc(attendanceLogs.date));
 
   const total = logs.length;
-  const attended = logs.filter((l) => l.status === "present").length;
+  // 'late' counts as attended — the student was present, just late.
+  const attended = logs.filter(
+    (l) => l.status === "present" || l.status === "late",
+  ).length;
   const pct = total ? Math.round((attended / total) * 100) : 0;
 
   return (

@@ -18,8 +18,13 @@
     "on": "चालू",
     "off": "बंद",
     "addOption": "जोडा",
-    "valuePlaceholder": "मूल्य",
-    "labelPlaceholder": "लेबल"
+    "namePlaceholder": {
+      "course": "उदा. B.Pharm",
+      "semester": "उदा. First Year",
+      "subject": "उदा. Pharmaceutics",
+      "class": "उदा. Batch C",
+      "practical_batch": "उदा. Batch C"
+    }
   },
   "settings": {
     "editableText": "संपादन करण्यायोग्य मजकूर (डेमो)",
@@ -40,7 +45,6 @@
     "users": "वापरकर्ते",
     "attendance": "उपस्थिती",
     "fees": "शुल्क",
-    "circulars": "परिपत्रके",
     "support": "सहाय्य",
     "settings": "सेटिंग्ज",
     "analytics": "विश्लेषण"
@@ -52,7 +56,6 @@
     "statTotalStudents": "एकूण विद्यार्थी",
     "statPendingRequests": "प्रलंबित विनंत्या",
     "statOpenTickets": "खुली तिकिटे",
-    "statCirculars": "परिपत्रके",
     "statAttendanceRate": "उपस्थिती दर",
     "statFeeBalance": "शुल्क शिल्लक",
     "statActiveStudents": "सक्रिय विद्यार्थी",
@@ -94,6 +97,8 @@
     "statusRejected": "नाकारलेले",
     "noResults": "तुमच्या फिल्टरशी कोणताही वापरकर्ता जुळत नाही.",
     "showing": "{total} पैकी {count} वापरकर्ते दाखवत आहे",
+    "resultsCountSingular": "1 वापरकर्ता सापडला",
+    "resultsCountPlural": "{count} वापरकर्ते सापडले",
     "create": {
       "title": "नवीन वापरकर्ता जोडा",
       "roleLabel": "खाते प्रकार",
@@ -272,52 +277,6 @@
       "outstanding": "थकबाकी",
       "historyTitle": "व्यवहार इतिहास",
       "empty": "अद्याप कोणताही शुल्क व्यवहार नाही."
-    }
-  },
-  "circulars": {
-    "title": "परिपत्रके",
-    "subtitle": "महाविद्यालयाच्या सूचना, वेळापत्रके आणि कागदपत्रे.",
-    "compose": {
-      "title": "परिपत्रक प्रकाशित करा",
-      "subtitle": "विद्यार्थ्यांसोबत सूचना, PDF किंवा प्रतिमा सामायिक करा.",
-      "titleLabel": "शीर्षक",
-      "titlePlaceholder": "उदा. सत्रमध्य परीक्षा वेळापत्रक",
-      "descriptionLabel": "वर्णन",
-      "descriptionPlaceholder": "ऐच्छिक तपशील",
-      "fileLabel": "संलग्नक",
-      "fileHint": "PDF किंवा प्रतिमा फाइल.",
-      "choose": "फाइल निवडा",
-      "noFile": "कोणतीही फाइल निवडली नाही",
-      "publish": "प्रकाशित करा",
-      "publishing": "प्रकाशित करत आहे…"
-    },
-    "board": {
-      "title": "सूचना फलक",
-      "empty": "अद्याप कोणतेही परिपत्रक प्रकाशित झालेले नाही.",
-      "view": "पाहा / डाउनलोड करा",
-      "postedOn": "{date} रोजी पोस्ट केले",
-      "by": "{name} द्वारे",
-      "delete": "हटवा",
-      "confirmDelete": "हे परिपत्रक हटवायचे?"
-    },
-    "type": {
-      "pdf": "PDF",
-      "image": "प्रतिमा"
-    },
-    "recent": {
-      "title": "अलीकडील परिपत्रके",
-      "empty": "अद्याप कोणतेही परिपत्रक नाही.",
-      "view": "पाहा"
-    },
-    "toast": {
-      "published": "परिपत्रक प्रकाशित केले.",
-      "deleted": "परिपत्रक हटवले.",
-      "needTitle": "कृपया एक शीर्षक जोडा.",
-      "needFile": "कृपया संलग्न करण्यासाठी एक फाइल निवडा.",
-      "forbidden": "तुम्हाला प्रकाशित करण्याची परवानगी नाही.",
-      "unconfigured": "फाइल अपलोड कॉन्फिगर केलेले नाही. कृपया प्रशासकाशी संपर्क साधा.",
-      "uploadFailed": "अपलोड अयशस्वी. कृपया पुन्हा प्रयत्न करा.",
-      "failed": "काहीतरी चूक झाली. कृपया पुन्हा प्रयत्न करा."
     }
   },
   "support": {

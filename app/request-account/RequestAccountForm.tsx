@@ -39,6 +39,9 @@ export function RequestAccountForm({
   const [done, setDone] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
 
+  const [accountType, setAccountType] = useState<"student" | "staff">("student");
+  const isStaff = accountType === "staff";
+
   const [fullName, setFullName] = useState("");
   const [studentId, setStudentId] = useState("");
   const [email, setEmail] = useState("");
@@ -64,6 +67,7 @@ export function RequestAccountForm({
 
     startTransition(async () => {
       const result = await requestAccountAction({
+        role: isStaff ? "teacher" : "student",
         fullName,
         studentId,
         email,
@@ -117,7 +121,36 @@ export function RequestAccountForm({
                 {t("requestAccount.subtitle")}
               </p>
 
-              <form onSubmit={submit} className="mt-5 space-y-4">
+              {/* Student / Staff account-type toggle */}
+              <div
+                role="tablist"
+                aria-label={t("requestAccount.typeLabel")}
+                className="mt-5 grid grid-cols-2 gap-1 rounded-lg border border-line bg-canvas p-1"
+              >
+                {(["student", "staff"] as const).map((m) => (
+                  <button
+                    key={m}
+                    type="button"
+                    role="tab"
+                    aria-selected={accountType === m}
+                    onClick={() => {
+                      setAccountType(m);
+                      setError(null);
+                    }}
+                    className={`cursor-pointer rounded-md px-3 py-2 text-sm font-medium transition-colors ${
+                      accountType === m
+                        ? "bg-primary text-primary-foreground"
+                        : "text-ink hover:bg-lavender"
+                    }`}
+                  >
+                    {m === "student"
+                      ? t("requestAccount.typeStudent")
+                      : t("requestAccount.typeStaff")}
+                  </button>
+                ))}
+              </div>
+
+              <form onSubmit={submit} className="mt-4 space-y-4">
                 <Field label={t("requestAccount.fullName")} htmlFor="ra-name">
                   <input
                     id="ra-name"
@@ -130,22 +163,24 @@ export function RequestAccountForm({
                   />
                 </Field>
 
-                <Field label={t("requestAccount.rollNo")} htmlFor="ra-roll">
-                  <input
-                    id="ra-roll"
-                    value={studentId}
-                    onChange={(e) => setStudentId(e.target.value)}
-                    placeholder={t("requestAccount.rollNoPlaceholder")}
-                    required
-                    className={inputClass}
-                  />
-                </Field>
+                {!isStaff && (
+                  <Field label={t("requestAccount.rollNo")} htmlFor="ra-roll">
+                    <input
+                      id="ra-roll"
+                      value={studentId}
+                      onChange={(e) => setStudentId(e.target.value)}
+                      placeholder={t("requestAccount.rollNoPlaceholder")}
+                      required
+                      className={inputClass}
+                    />
+                  </Field>
+                )}
 
                 <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
                   <Field
                     label={t("requestAccount.email")}
                     htmlFor="ra-email"
-                    optional={t("requestAccount.optional")}
+                    optional={isStaff ? undefined : t("requestAccount.optional")}
                   >
                     <input
                       id="ra-email"
@@ -154,13 +189,14 @@ export function RequestAccountForm({
                       onChange={(e) => setEmail(e.target.value)}
                       placeholder={t("requestAccount.emailPlaceholder")}
                       autoComplete="email"
+                      required={isStaff}
                       className={inputClass}
                     />
                   </Field>
                   <Field
                     label={t("requestAccount.phone")}
                     htmlFor="ra-phone"
-                    optional={t("requestAccount.optional")}
+                    optional={isStaff ? undefined : t("requestAccount.optional")}
                   >
                     <input
                       id="ra-phone"
@@ -168,43 +204,49 @@ export function RequestAccountForm({
                       onChange={(e) => setPhone(e.target.value)}
                       placeholder={t("requestAccount.phonePlaceholder")}
                       autoComplete="tel"
+                      required={isStaff}
                       className={inputClass}
                     />
                   </Field>
                 </div>
 
-                <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
-                  <Field label={t("requestAccount.course")} htmlFor="ra-course">
-                    <Select
-                      id="ra-course"
-                      value={course}
-                      onChange={setCourse}
-                      options={courseOptions}
-                      placeholder={t("requestAccount.selectPlaceholder")}
-                    />
-                  </Field>
-                  <Field label={t("requestAccount.class")} htmlFor="ra-class">
-                    <Select
-                      id="ra-class"
-                      value={className}
-                      onChange={setClassName}
-                      options={classOptions}
-                      placeholder={t("requestAccount.selectPlaceholder")}
-                    />
-                  </Field>
-                  <Field
-                    label={t("requestAccount.practicalBatch")}
-                    htmlFor="ra-batch"
-                  >
-                    <Select
-                      id="ra-batch"
-                      value={practicalBatch}
-                      onChange={setPracticalBatch}
-                      options={batchOptions}
-                      placeholder={t("requestAccount.selectPlaceholder")}
-                    />
-                  </Field>
-                </div>
+                {!isStaff && (
+                  <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+                    <Field
+                      label={t("requestAccount.course")}
+                      htmlFor="ra-course"
+                    >
+                      <Select
+                        id="ra-course"
+                        value={course}
+                        onChange={setCourse}
+                        options={courseOptions}
+                        placeholder={t("requestAccount.selectPlaceholder")}
+                      />
+                    </Field>
+                    <Field label={t("requestAccount.class")} htmlFor="ra-class">
+                      <Select
+                        id="ra-class"
+                        value={className}
+                        onChange={setClassName}
+                        options={classOptions}
+                        placeholder={t("requestAccount.selectPlaceholder")}
+                      />
+                    </Field>
+                    <Field
+                      label={t("requestAccount.practicalBatch")}
+                      htmlFor="ra-batch"
+                    >
+                      <Select
+                        id="ra-batch"
+                        value={practicalBatch}
+                        onChange={setPracticalBatch}
+                        options={batchOptions}
+                        placeholder={t("requestAccount.selectPlaceholder")}
+                      />
+                    </Field>
+                  </div>
+                )}
 
                 <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
                   <Field

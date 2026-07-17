@@ -2,8 +2,9 @@
 // imports here, so this module is safe to import from BOTH server actions and
 // client components (the balance maths must agree on both sides).
 //
-// Design rule (see db/schema.ts): a balance is COMPUTED (charges − payments),
+// Design rule (see db/schema.ts): a balance is COMPUTED (payments − charges),
 // never stored, so editing an old row can never desync a running total.
+// A negative balance means the student still owes; positive means overpaid.
 
 export type LedgerType = "charge" | "payment";
 
@@ -20,10 +21,10 @@ export type LedgerRow = {
 export type FeeBalances = {
   charged: number; // sum of all charges
   paid: number; // sum of all payments
-  balance: number; // outstanding = charged − paid
+  balance: number; // outstanding = paid − charged (negative = owes, positive = overpaid)
 };
 
-/** Sum charges/payments into a net outstanding balance. */
+/** Sum charges/payments into a net outstanding balance (paid − charged). */
 export function computeBalances(
   rows: { type: LedgerType; amount: number }[],
 ): FeeBalances {
@@ -33,7 +34,18 @@ export function computeBalances(
     if (r.type === "charge") charged += r.amount;
     else paid += r.amount;
   }
-  return { charged, paid, balance: charged - paid };
+  return { charged, paid, balance: paid - charged };
+}
+
+/**
+ * Text-color class for an outstanding balance under the paid − charged
+ * convention: negative = still owes (danger), positive = overpaid (success),
+ * zero = settled (neutral ink).
+ */
+export function balanceToneClass(balance: number): string {
+  if (balance < 0) return "text-danger";
+  if (balance > 0) return "text-success";
+  return "text-ink";
 }
 
 /** ₹ with Indian digit grouping. Locale-stable so server and client agree. */

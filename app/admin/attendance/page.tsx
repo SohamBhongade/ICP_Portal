@@ -20,7 +20,8 @@ export default async function AdminAttendancePage() {
       .select({
         studentId: attendanceLogs.studentId,
         conducted: sql<number>`count(*)`,
-        attended: sql<number>`coalesce(sum(case when ${attendanceLogs.status} = 'present' then 1 else 0 end), 0)`,
+        // 'late' counts as attended — a late student was still present.
+        attended: sql<number>`coalesce(sum(case when ${attendanceLogs.status} in ('present', 'late') then 1 else 0 end), 0)`,
       })
       .from(attendanceLogs)
       .groupBy(attendanceLogs.studentId),

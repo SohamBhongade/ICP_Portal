@@ -1,24 +1,20 @@
 "use client";
 
-// Admin dashboard presentation — live StatCards + recent circulars feed.
+// Admin dashboard presentation — live StatCards.
 
 import { LifeBuoy, Users, Wallet } from "lucide-react";
 import { StatCard } from "@/components/ui/StatCard";
 import { useT } from "@/components/i18n/LanguageProvider";
-import { RecentCirculars } from "@/components/circulars/RecentCirculars";
-import type { CircularItem } from "@/components/circulars/CircularsBoard";
 import { formatCurrency } from "@/lib/fees";
 
 export function AdminOverview({
   activeStudents,
   pendingTickets,
   feesThisMonth,
-  circulars,
 }: {
   activeStudents: number;
   pendingTickets: number;
   feesThisMonth: number;
-  circulars: CircularItem[];
 }) {
   const t = useT();
 
@@ -42,8 +38,6 @@ export function AdminOverview({
           tone="mint"
         />
       </div>
-
-      <RecentCirculars items={circulars} />
     </div>
   );
 }

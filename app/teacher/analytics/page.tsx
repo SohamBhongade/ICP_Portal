@@ -16,7 +16,8 @@ import {
 } from "./TeacherAnalytics";
 
 const sessionKey = sql`${attendanceLogs.date} || '|' || coalesce(${attendanceLogs.className}, '') || '|' || coalesce(${attendanceLogs.subject}, '') || '|' || coalesce(${attendanceLogs.practicalBatch}, '')`;
-const presentSum = sql<number>`coalesce(sum(case when ${attendanceLogs.status} = 'present' then 1 else 0 end), 0)`;
+// 'late' counts as attended — a late student was still present.
+const presentSum = sql<number>`coalesce(sum(case when ${attendanceLogs.status} in ('present', 'late') then 1 else 0 end), 0)`;
 
 export default async function TeacherAnalyticsPage() {
   const me = await requireRole("teacher", "admin");

@@ -24,7 +24,7 @@ export type RosterStudent = {
   studentId: string | null;
 };
 
-export type AttendanceStatus = "present" | "absent";
+export type AttendanceStatus = "present" | "absent" | "late";
 
 export async function fetchStudentsAction(filters: {
   course: string;

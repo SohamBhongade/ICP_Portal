@@ -8,31 +8,27 @@ import { db } from "@/db";
 import { attendanceLogs } from "@/db/schema";
 import { requireRole } from "@/lib/auth";
 import { weekBounds } from "@/lib/dates";
-import { getRecentCirculars } from "@/lib/circulars";
 import { TeacherOverview } from "./TeacherOverview";
 
 export default async function TeacherDashboardPage() {
   const teacher = await requireRole("teacher", "admin");
   const { start, end } = weekBounds();
 
-  const [sessions, circulars] = await Promise.all([
-    db
-      .select({
-        date: attendanceLogs.date,
-        className: attendanceLogs.className,
-        subject: attendanceLogs.subject,
-        practicalBatch: attendanceLogs.practicalBatch,
-      })
-      .from(attendanceLogs)
-      .where(
-        and(
-          eq(attendanceLogs.markedBy, teacher.id),
-          gte(attendanceLogs.date, start),
-          lte(attendanceLogs.date, end),
-        ),
+  const sessions = await db
+    .select({
+      date: attendanceLogs.date,
+      className: attendanceLogs.className,
+      subject: attendanceLogs.subject,
+      practicalBatch: attendanceLogs.practicalBatch,
+    })
+    .from(attendanceLogs)
+    .where(
+      and(
+        eq(attendanceLogs.markedBy, teacher.id),
+        gte(attendanceLogs.date, start),
+        lte(attendanceLogs.date, end),
       ),
-    getRecentCirculars(),
-  ]);
+    );
 
   const distinct = new Set(
     sessions.map(
@@ -40,7 +36,5 @@ export default async function TeacherDashboardPage() {
     ),
   );
 
-  return (
-    <TeacherOverview classesThisWeek={distinct.size} circulars={circulars} />
-  );
+  return <TeacherOverview classesThisWeek={distinct.size} />;
 }

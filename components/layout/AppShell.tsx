@@ -10,6 +10,7 @@
 // prefers-reduced-motion (see globals.css).
 
 import { useState } from "react";
+import Image from "next/image";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { Menu, X, type LucideIcon } from "lucide-react";
@@ -64,9 +65,19 @@ export function AppShell({
         }`}
       >
         <div className="flex items-center justify-between gap-2 px-5 py-5">
-          <div>
-            <p className="text-lg font-semibold tracking-tight">{BRAND}</p>
-            <p className="text-xs text-primary-foreground/70">{BRAND_SUB}</p>
+          <div className="flex items-center gap-3">
+            <Image
+              src="/logo.png"
+              alt="Imperial College of Pharmacy Logo"
+              width={48}
+              height={48}
+              className="size-11 shrink-0 rounded-md bg-white/95 object-contain p-1"
+              priority
+            />
+            <div>
+              <p className="text-lg font-semibold tracking-tight">{BRAND}</p>
+              <p className="text-xs text-primary-foreground/70">{BRAND_SUB}</p>
+            </div>
           </div>
           <button
             type="button"

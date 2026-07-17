@@ -7,7 +7,12 @@ import { ArrowDownCircle, ArrowUpCircle, Wallet } from "lucide-react";
 import { StatCard } from "@/components/ui/StatCard";
 import { useT } from "@/components/i18n/LanguageProvider";
 import { Editable } from "@/components/edit-mode/Editable";
-import { formatCurrency, type FeeBalances, type LedgerRow } from "@/lib/fees";
+import {
+  balanceToneClass,
+  formatCurrency,
+  type FeeBalances,
+  type LedgerRow,
+} from "@/lib/fees";
 
 export function StudentFeesView({
   rows,
@@ -42,6 +47,7 @@ export function StudentFeesView({
           label={t("fees.student.outstanding")}
           value={formatCurrency(balances.balance)}
           icon={Wallet}
+          valueClassName={balanceToneClass(balances.balance)}
         />
       </div>
 
