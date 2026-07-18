@@ -95,6 +95,14 @@ export function EditableDropdown({
         }
       >
         {placeholder && <option value="">{placeholder}</option>}
+        {/* Safety net: if the current (controlled) value isn't among the options
+            — e.g. a legacy value, a deactivated option, or case drift — surface
+            it so the field still shows it and a save never silently drops it. */}
+        {value !== undefined &&
+          value !== "" &&
+          !options.some((o) => o.value === value) && (
+            <option value={value}>{value}</option>
+          )}
         {options.map((o) => (
           <option key={o.id} value={o.value}>
             {o.label}

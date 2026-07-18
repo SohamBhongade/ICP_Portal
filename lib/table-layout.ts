@@ -12,10 +12,11 @@
 // known column exactly once — unknown keys dropped, duplicates collapsed, and
 // any newly-added columns appended (visible) so the schema can evolve safely.
 
-/** Customizable columns, in their default display order. `fullName` (the
- *  identity anchor) and the row-actions column are structural and NOT part of
- *  this set — they are always rendered first / last respectively. */
+/** Customizable columns, in their default display order. Every column here —
+ *  including `name` — can be reordered or hidden from the "Customize columns"
+ *  panel. Only the row-actions column is structural (always rendered last). */
 export const USERS_COLUMN_KEYS = [
+  "name",
   "rollNo",
   "email",
   "phone",
@@ -30,6 +31,7 @@ export type UsersColumnKey = (typeof USERS_COLUMN_KEYS)[number];
 
 /** i18n key for each column's header label (reused by the config panel). */
 export const USERS_COLUMN_LABEL_KEY: Record<UsersColumnKey, string> = {
+  name: "onboarding.colName",
   rollNo: "onboarding.colRollNo",
   email: "onboarding.colEmail",
   phone: "onboarding.colPhone",
@@ -60,11 +62,19 @@ export const DEFAULT_USERS_TABLE_LAYOUT: UsersTableLayout =
  * Coerce any input into a valid, complete layout. This is the trust boundary
  * for both reads (a persisted blob may predate a column change) and writes (the
  * action must never store an attacker-controlled key). Guarantees: every known
- * column appears exactly once, unknown keys are dropped, and missing columns are
- * appended as visible so the result is always safe to render.
+ * column appears exactly once and unknown keys are dropped.
+ *
+ * A missing column (e.g. `name` for an admin whose saved layout predates it) is
+ * inserted at its correct position RELATIVE to the default order — right after
+ * the nearest already-placed column that precedes it in DEFAULT (or at the front
+ * when it has none) — rather than dumped at the end. So a previously-default
+ * layout reconstructs exactly, and `name` lands first instead of jumping to the
+ * far right on the admin's next login.
  */
 export function sanitizeUsersTableLayout(input: unknown): UsersTableLayout {
-  const known = new Set<string>(USERS_COLUMN_KEYS);
+  const canonicalIndex = new Map<UsersColumnKey, number>(
+    USERS_COLUMN_KEYS.map((key, i) => [key, i]),
+  );
   const seen = new Set<UsersColumnKey>();
   const result: UsersTableLayout = [];
 
@@ -72,7 +82,9 @@ export function sanitizeUsersTableLayout(input: unknown): UsersTableLayout {
     for (const item of input) {
       if (!item || typeof item !== "object") continue;
       const key = (item as { key?: unknown }).key;
-      if (typeof key !== "string" || !known.has(key)) continue;
+      if (typeof key !== "string" || !canonicalIndex.has(key as UsersColumnKey)) {
+        continue;
+      }
       const k = key as UsersColumnKey;
       if (seen.has(k)) continue; // collapse duplicates
       seen.add(k);
@@ -81,9 +93,19 @@ export function sanitizeUsersTableLayout(input: unknown): UsersTableLayout {
     }
   }
 
-  // Append any known column the saved layout didn't mention (schema evolved).
+  // Splice in any column the saved layout didn't mention at its default-relative
+  // slot. Iterating in canonical order keeps consecutive inserts in sequence.
   for (const key of USERS_COLUMN_KEYS) {
-    if (!seen.has(key)) result.push({ key, visible: true });
+    if (seen.has(key)) continue;
+    seen.add(key);
+    const idx = canonicalIndex.get(key)!;
+    // Insert just after the last already-placed column that precedes this one in
+    // the default order; 0 (front) when there is no such predecessor.
+    let insertAt = 0;
+    for (let i = 0; i < result.length; i++) {
+      if (canonicalIndex.get(result[i].key)! < idx) insertAt = i + 1;
+    }
+    result.splice(insertAt, 0, { key, visible: true });
   }
 
   return result;

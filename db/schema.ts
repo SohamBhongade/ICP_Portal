@@ -44,7 +44,8 @@ export const users = sqliteTable("users", {
   })
     .notNull()
     .default("student"),
-  course: text("course"), // value sourced from dropdown_options
+  course: text("course"), // canonical value from lib/courses normalization
+  year: integer("year"), // academic year 1–4 (students); null when unknown
   className: text("class_name"),
   practicalBatch: text("practical_batch"), // 'Batch A' etc — students only
   // Staff/faculty professional details (null for students). Captured by the

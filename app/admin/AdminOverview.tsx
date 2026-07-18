@@ -1,16 +1,23 @@
 "use client";
 
-// Admin dashboard presentation — live StatCard + course/year breakdown.
+// Admin dashboard presentation — live StatCard + dynamic course/year breakdown.
+//
+// The breakdown is data-driven: one column per course that actually has active
+// students, each showing its total and a stat per year present (plus an
+// "unspecified" bucket when some students have no year). Nothing is hardcoded to
+// B.Pharm/D.Pharm, so new programmes and years render automatically.
 
 import { GraduationCap, Users } from "lucide-react";
 import { StatCard } from "@/components/ui/StatCard";
 import { useT } from "@/components/i18n/LanguageProvider";
 
-export type CourseBreakdown = { total: number; year1: number; year2: number };
-export type StudentBreakdown = {
-  bpharm: CourseBreakdown;
-  dpharm: CourseBreakdown;
+export type CourseBreakdown = {
+  course: string;
+  total: number;
+  years: { year: number; count: number }[];
+  unspecified: number;
 };
+export type StudentBreakdown = CourseBreakdown[];
 
 export function AdminOverview({
   activeStudents,
@@ -46,34 +53,30 @@ export function AdminOverview({
           </span>
         </div>
 
-        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-          <CourseColumn
-            title={t("dashboard.courseBPharm")}
-            data={breakdown.bpharm}
-          />
-          <CourseColumn
-            title={t("dashboard.courseDPharm")}
-            data={breakdown.dpharm}
-          />
-        </div>
+        {breakdown.length === 0 ? (
+          <p className="rounded-lg border border-dashed border-line bg-canvas px-4 py-8 text-center text-sm text-muted">
+            {t("dashboard.breakdownEmpty")}
+          </p>
+        ) : (
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
+            {breakdown.map((c) => (
+              <CourseColumn key={c.course} data={c} />
+            ))}
+          </div>
+        )}
       </section>
     </div>
   );
 }
 
-/** One course's total + per-year breakdown, styled to match StatCard tokens. */
-function CourseColumn({
-  title,
-  data,
-}: {
-  title: string;
-  data: CourseBreakdown;
-}) {
+/** One course's total + a stat per year present, styled to match StatCard tokens. */
+function CourseColumn({ data }: { data: CourseBreakdown }) {
   const t = useT();
   return (
     <div className="rounded-lg border border-line bg-canvas p-4">
       <div className="flex items-baseline justify-between">
-        <span className="text-sm font-medium text-ink">{title}</span>
+        {/* Course value is already canonical (e.g. "B.pharm"); show it verbatim. */}
+        <span className="text-sm font-medium text-ink">{data.course}</span>
         <span className="text-2xl font-semibold tabular-nums text-ink">
           {data.total}
         </span>
@@ -81,8 +84,19 @@ function CourseColumn({
       <p className="text-xs text-muted">{t("dashboard.totalLabel")}</p>
 
       <dl className="mt-3 grid grid-cols-2 gap-2">
-        <YearStat label={t("dashboard.year1")} value={data.year1} />
-        <YearStat label={t("dashboard.year2")} value={data.year2} />
+        {data.years.map((y) => (
+          <YearStat
+            key={y.year}
+            label={t("dashboard.yearLabel", { year: y.year })}
+            value={y.count}
+          />
+        ))}
+        {data.unspecified > 0 && (
+          <YearStat
+            label={t("dashboard.yearUnset")}
+            value={data.unspecified}
+          />
+        )}
       </dl>
     </div>
   );

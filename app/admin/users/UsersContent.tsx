@@ -303,8 +303,7 @@ export function UsersContent({
               <table className="w-full min-w-[680px] text-left text-sm">
                 <thead>
                   <tr className="border-b border-line bg-canvas text-xs uppercase tracking-wide text-muted">
-                    {/* Name is the identity anchor — always first, not toggleable. */}
-                    <Th>{t("onboarding.colName")}</Th>
+                    {/* Fully dynamic — every column (incl. Name) follows the saved layout. */}
                     {visibleColumns.map((key) => (
                       <Th key={key}>{t(USERS_COLUMN_LABEL_KEY[key])}</Th>
                     ))}
@@ -315,7 +314,7 @@ export function UsersContent({
                   {filtered.length === 0 ? (
                     <tr>
                       <td
-                        colSpan={1 + visibleColumns.length + (canManage ? 1 : 0)}
+                        colSpan={visibleColumns.length + (canManage ? 1 : 0)}
                         className="px-4 py-10 text-center text-sm text-muted"
                       >
                         {t("onboarding.noResults")}
@@ -327,9 +326,6 @@ export function UsersContent({
                         key={u.id}
                         className="border-b border-line last:border-0 hover:bg-canvas"
                       >
-                        <td className="px-4 py-3 font-medium text-ink">
-                          {u.fullName}
-                        </td>
                         {visibleColumns.map((key) => (
                           <UserCell key={key} column={key} user={u} t={t} />
                         ))}
@@ -463,6 +459,8 @@ function UserCell({
   t: Translator;
 }) {
   switch (column) {
+    case "name":
+      return <td className="px-4 py-3 font-medium text-ink">{u.fullName}</td>;
     case "rollNo":
       return <td className="px-4 py-3 text-muted">{u.studentId ?? "—"}</td>;
     case "email":

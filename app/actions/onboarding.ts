@@ -28,7 +28,24 @@ import {
 } from "@/db/schema";
 import { currentUserWithCapability } from "@/lib/auth";
 import { canAssignRole, type Role } from "@/lib/auth/permissions";
-import { resolveCourse } from "@/lib/courses";
+import { extractYear, normalizeCourse, resolveCourse } from "@/lib/courses";
+
+/**
+ * Derive the canonical course + academic year for a student from the raw course
+ * cell (year may be embedded, e.g. "1st year B.Pharm") with the class cell as a
+ * year fallback. Returns `invalid` only when a non-empty course cell contains no
+ * course-like text at all (mirrors resolveCourse's contract).
+ */
+function resolveStudentCourseYear(
+  courseRaw: string | undefined,
+  classRaw: string | undefined,
+): { ok: true; course?: string; year?: number } | { ok: false } {
+  const res = resolveCourse(courseRaw);
+  if (res.status === "invalid") return { ok: false };
+  const norm = normalizeCourse(courseRaw);
+  const year = norm.year ?? extractYear(classRaw ?? "").year ?? undefined;
+  return { ok: true, course: norm.course ?? undefined, year };
+}
 
 // A created account can be any role — which ones a given actor may actually
 // assign is enforced by canAssignRole() below (anti-escalation).
@@ -142,13 +159,15 @@ export async function createUserAction(
 
   const isStudent = role === "student";
 
-  // Normalize + validate the course to a canonical enum value before writing.
-  // Only students carry a course; an unrecognised value is rejected outright.
+  // Normalize the course to its canonical value + academic year before writing.
+  // Only students carry a course/year; junk (no course text) is rejected.
   let course: string | undefined;
+  let year: number | undefined;
   if (isStudent) {
-    const courseRes = resolveCourse(input.course);
-    if (courseRes.status === "invalid") return { ok: false, error: "invalidCourse" };
-    course = courseRes.status === "ok" ? courseRes.value : undefined;
+    const resolved = resolveStudentCourseYear(input.course, input.className);
+    if (!resolved.ok) return { ok: false, error: "invalidCourse" };
+    course = resolved.course;
+    year = resolved.year;
   }
 
   const res = await db
@@ -161,6 +180,7 @@ export async function createUserAction(
       role,
       status: "active",
       course,
+      year,
       className: isStudent ? input.className?.trim() || undefined : undefined,
       practicalBatch: isStudent
         ? input.practicalBatch?.trim() || undefined
@@ -205,14 +225,14 @@ export async function bulkImportStudentsAction(
       continue;
     }
 
-    // Normalize + validate the course. A bad course fails ONLY that row (with
-    // its 1-based number) — good rows still import; the DB is never corrupted.
-    const courseRes = resolveCourse(r.course);
-    if (courseRes.status === "invalid") {
+    // Normalize the course to its canonical value + academic year. A junk course
+    // fails ONLY that row (with its 1-based number) — good rows still import.
+    const resolved = resolveStudentCourseYear(r.course, r.className);
+    if (!resolved.ok) {
       failed.push({ row: i + 1, reason: "invalidCourse" });
       continue;
     }
-    const course = courseRes.status === "ok" ? courseRes.value : undefined;
+    const { course, year } = resolved;
 
     try {
       const passwordHash = await bcrypt.hash(
@@ -229,6 +249,7 @@ export async function bulkImportStudentsAction(
           role: "student",
           status: "active",
           course,
+          year,
           className: r.className?.trim() || undefined,
           practicalBatch: r.practicalBatch?.trim() || undefined,
           passwordHash,
@@ -394,12 +415,15 @@ export async function updateUserAction(
     }
   }
 
-  // Normalize + validate the course for students (mirrors create/approve).
+  // Normalize the course to its canonical value + academic year (mirrors
+  // create/import). Staff carry neither.
   let course: string | null = null;
+  let year: number | null = null;
   if (!isStaff) {
-    const courseRes = resolveCourse(input.course);
-    if (courseRes.status === "invalid") return { ok: false, error: "invalidCourse" };
-    course = courseRes.status === "ok" ? courseRes.value : null;
+    const resolved = resolveStudentCourseYear(input.course, input.className);
+    if (!resolved.ok) return { ok: false, error: "invalidCourse" };
+    course = resolved.course ?? null;
+    year = resolved.year ?? null;
   }
 
   // Whitelist the status; never let an actor change their OWN status (a demotion
@@ -417,6 +441,7 @@ export async function updateUserAction(
         phone: input.phone?.trim() || null,
         studentId: isStaff ? null : studentId,
         course: isStaff ? null : course,
+        year: isStaff ? null : year,
         className: isStaff ? null : input.className?.trim() || null,
         practicalBatch: isStaff ? null : input.practicalBatch?.trim() || null,
         status: nextStatus,

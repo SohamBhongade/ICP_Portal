@@ -20,7 +20,7 @@ import {
   type ActionError,
   type CsvStudentRow,
 } from "@/app/actions/onboarding";
-import { resolveCourse } from "@/lib/courses";
+import { extractYear, normalizeCourse, resolveCourse } from "@/lib/courses";
 import type { ToastKind } from "./UsersContent";
 
 type TargetField = keyof CsvStudentRow;
@@ -138,6 +138,19 @@ export function CsvImport({
       mapped.map((row) => {
         const res = resolveCourse(row.course);
         return res.status === "ok" ? res.value : "";
+      }),
+    [mapped],
+  );
+
+  // The academic year each row will be saved with — pulled from the course cell
+  // ("1st year B.Pharm") or, failing that, the class cell. "" when none. Mirrors
+  // the server's derivation so the preview matches exactly what gets stored.
+  const resolvedYears: string[] = useMemo(
+    () =>
+      mapped.map((row) => {
+        const year =
+          normalizeCourse(row.course).year ?? extractYear(row.className ?? "").year;
+        return year != null ? String(year) : "";
       }),
     [mapped],
   );
@@ -337,6 +350,9 @@ export function CsvImport({
                           {t("onboarding.csv.fieldCourse")}
                         </th>
                         <th className="px-3 py-2 font-medium">
+                          {t("onboarding.csv.fieldYear")}
+                        </th>
+                        <th className="px-3 py-2 font-medium">
                           {t("onboarding.csv.statusOk")}
                         </th>
                       </tr>
@@ -371,6 +387,9 @@ export function CsvImport({
                               ) : (
                                 <span className="text-muted">—</span>
                               )}
+                            </td>
+                            <td className="px-3 py-1.5 text-muted">
+                              {resolvedYears[i] || "—"}
                             </td>
                             <td className="px-3 py-1.5">
                               {err ? (

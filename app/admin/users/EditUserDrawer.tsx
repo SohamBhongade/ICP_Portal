@@ -39,6 +39,35 @@ const STATUS_LABEL_KEY: Record<UserRow["status"], string> = {
   rejected: "onboarding.statusRejected",
 };
 
+// Loosely-normalize a value for tolerant comparison: lowercase + strip anything
+// that isn't a letter or digit. Lets "B.pharm" match option "B.Pharm", and
+// "Second" match "Second Year".
+const loose = (s: string) => s.toLowerCase().replace(/[^a-z0-9]/g, "");
+
+/**
+ * Resolve a stored DB value to the dropdown OPTION value it should select.
+ * Stored values can drift from an option's exact string — different casing or
+ * punctuation ("B.pharm" vs "B.Pharm") or a shorthand ("Second" for "Second
+ * Year"). We match tolerantly and return the option's canonical value so the
+ * select prepopulates. Falls back to the raw value (EditableDropdown still shows
+ * it via its safety-net option), so nothing is ever silently dropped.
+ */
+function matchOptionValue(raw: string, options: DropdownOptionItem[]): string {
+  if (!raw) return "";
+  // 1) exact match — the common, already-aligned case.
+  if (options.some((o) => o.value === raw)) return raw;
+  const target = loose(raw);
+  if (!target) return raw;
+  // 2) case / punctuation-insensitive exact match.
+  const ci = options.find((o) => loose(o.value) === target);
+  if (ci) return ci.value;
+  // 3) prefix either direction — handles shorthand like "Second" ↔ "Second Year".
+  const prefix = options.find(
+    (o) => loose(o.value).startsWith(target) || target.startsWith(loose(o.value)),
+  );
+  return prefix ? prefix.value : raw;
+}
+
 export function EditUserDrawer({
   user,
   isSelf,
@@ -68,9 +97,17 @@ export function EditUserDrawer({
   const [email, setEmail] = useState(user.email ?? "");
   const [phone, setPhone] = useState(user.phone ?? "");
   const [studentId, setStudentId] = useState(user.studentId ?? "");
-  const [course, setCourse] = useState(user.course ?? "");
-  const [className, setClassName] = useState(user.className ?? "");
-  const [practicalBatch, setPracticalBatch] = useState(user.practicalBatch ?? "");
+  // Resolve stored values to the matching option so the selects prepopulate even
+  // when the DB value drifts from the option's exact string (case / shorthand).
+  const [course, setCourse] = useState(() =>
+    matchOptionValue(user.course ?? "", courseOptions),
+  );
+  const [className, setClassName] = useState(() =>
+    matchOptionValue(user.className ?? "", classOptions),
+  );
+  const [practicalBatch, setPracticalBatch] = useState(() =>
+    matchOptionValue(user.practicalBatch ?? "", batchOptions),
+  );
   const [status, setStatus] = useState<UserRow["status"]>(user.status);
 
   const submit = (e: React.FormEvent) => {

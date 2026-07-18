@@ -64,11 +64,10 @@
     "statClassesThisWeek": "Classes this week",
     "breakdownTitle": "Active students by course & year",
     "breakdownSubtitle": "Live enrolment across programmes",
-    "courseBPharm": "B.Pharm",
-    "courseDPharm": "D.Pharm",
+    "breakdownEmpty": "No active students enrolled yet.",
     "totalLabel": "Total enrolled",
-    "year1": "1st Year",
-    "year2": "2nd Year"
+    "yearLabel": "Year {year}",
+    "yearUnset": "Unspecified"
   },
   "onboarding": {
     "title": "User Onboarding",
@@ -173,6 +172,7 @@
       "fieldEmail": "Email",
       "fieldPhone": "Phone",
       "fieldCourse": "Course",
+      "fieldYear": "Year",
       "fieldClass": "Class",
       "fieldBatch": "Practical batch"
     },
