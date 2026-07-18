@@ -20,6 +20,9 @@
 
 import { sql } from "drizzle-orm";
 import { sqliteTable, text, integer, real } from "drizzle-orm/sqlite-core";
+// Relative (not "@/") import: drizzle-kit parses this file outside Next.js and
+// does not resolve the "@/" path alias. Type-only, so it's erased at runtime.
+import type { UiPreferences } from "../lib/table-layout";
 
 // ---------- Users ----------
 export const users = sqliteTable("users", {
@@ -33,7 +36,7 @@ export const users = sqliteTable("users", {
     enum: [
       "admin",
       "office admin",
-      "principle",
+      "principal",
       "staff",
       "faculty",
       "student",
@@ -44,12 +47,22 @@ export const users = sqliteTable("users", {
   course: text("course"), // value sourced from dropdown_options
   className: text("class_name"),
   practicalBatch: text("practical_batch"), // 'Batch A' etc — students only
+  // Staff/faculty professional details (null for students). Captured by the
+  // self-service request form for non-student roles; informational only —
+  // staff still authenticate by email, so employeeId carries no unique constraint.
+  employeeId: text("employee_id"),
+  department: text("department"),
+  designation: text("designation"),
   status: text("status", { enum: ["pending", "active", "rejected"] })
     .notNull()
     .default("pending"),
   preferredLanguage: text("preferred_language", { enum: ["en"] })
     .notNull()
     .default("en"),
+  // Per-user UI preferences (JSON). Currently holds the customizable Users-grid
+  // column layout; namespaced so other tables can persist their own later.
+  // Nullable -> a fresh account falls back to the default layout.
+  uiPreferences: text("ui_preferences", { mode: "json" }).$type<UiPreferences>(),
   createdAt: integer("created_at", { mode: "timestamp" })
     .notNull()
     .default(sql`(unixepoch())`),

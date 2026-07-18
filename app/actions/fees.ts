@@ -2,7 +2,7 @@
 
 // Phase 10 — Fee ledger server actions.
 //
-// ALL entry points require the `fees` capability (admin, principle, office
+// ALL entry points require the `fees` capability (admin, principal, office
 // admin), re-verified server-side on every call (never trust the client).
 // Students read their own ledger through the server component at /student/fees;
 // they never reach a mutation here.

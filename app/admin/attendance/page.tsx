@@ -16,7 +16,7 @@ import {
 } from "./AdminAttendanceOverview";
 
 export default async function AdminAttendancePage() {
-  // Read-only, cross-class monitoring is a management view (admin + principle).
+  // Read-only, cross-class monitoring is a management view (admin + principal).
   await requireCapability("settings");
   const [agg, students, sessionRow] = await Promise.all([
     db

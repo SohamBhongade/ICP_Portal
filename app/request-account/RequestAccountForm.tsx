@@ -14,11 +14,22 @@ import {
   requestAccountAction,
   type RequestAccountError,
 } from "@/app/actions/auth";
+import type { Role } from "@/lib/auth/permissions";
 
 type Item = { value: string; label: string };
 // Server error codes + a client-only "passwords don't match" check. All map to
 // requestAccount.errors.<code> translation keys.
 type FormError = RequestAccountError | "passwordMismatch";
+
+// Roles the public may apply for — every role EXCEPT admin. Order matters (shown
+// as-is in the dropdown). The server re-checks this list; the client just mirrors it.
+const APPLICABLE_ROLES: { value: Role; labelKey: string }[] = [
+  { value: "student", labelKey: "onboarding.roleStudent" },
+  { value: "principal", labelKey: "onboarding.rolePrincipal" },
+  { value: "office admin", labelKey: "onboarding.roleOfficeAdmin" },
+  { value: "faculty", labelKey: "onboarding.roleFaculty" },
+  { value: "staff", labelKey: "onboarding.roleStaff" },
+];
 
 const inputClass =
   "w-full rounded-md border border-line bg-surface px-3 py-2 text-sm text-ink placeholder:text-muted focus:border-teal";
@@ -38,6 +49,7 @@ export function RequestAccountForm({
   const [done, setDone] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
 
+  const [role, setRole] = useState<Role>("student");
   const [fullName, setFullName] = useState("");
   const [studentId, setStudentId] = useState("");
   const [email, setEmail] = useState("");
@@ -45,8 +57,13 @@ export function RequestAccountForm({
   const [course, setCourse] = useState("");
   const [className, setClassName] = useState("");
   const [practicalBatch, setPracticalBatch] = useState("");
+  const [employeeId, setEmployeeId] = useState("");
+  const [department, setDepartment] = useState("");
+  const [designation, setDesignation] = useState("");
   const [password, setPassword] = useState("");
   const [confirm, setConfirm] = useState("");
+
+  const isStudent = role === "student";
 
   const submit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -63,6 +80,7 @@ export function RequestAccountForm({
 
     startTransition(async () => {
       const result = await requestAccountAction({
+        role,
         fullName,
         studentId,
         email,
@@ -70,6 +88,9 @@ export function RequestAccountForm({
         course,
         className,
         practicalBatch,
+        employeeId,
+        department,
+        designation,
         password,
       });
       if (result.ok) setDone(true);
@@ -116,6 +137,23 @@ export function RequestAccountForm({
               </p>
 
               <form onSubmit={submit} className="mt-5 space-y-4">
+                {/* Role selector — drives which field set renders below. */}
+                <Field label={t("requestAccount.roleQuestion")} htmlFor="ra-role">
+                  <select
+                    id="ra-role"
+                    value={role}
+                    onChange={(e) => setRole(e.target.value as Role)}
+                    required
+                    className="w-full rounded-md border border-line bg-surface px-3 py-2 text-sm text-ink focus:border-teal"
+                  >
+                    {APPLICABLE_ROLES.map((r) => (
+                      <option key={r.value} value={r.value}>
+                        {t(r.labelKey)}
+                      </option>
+                    ))}
+                  </select>
+                </Field>
+
                 <Field label={t("requestAccount.fullName")} htmlFor="ra-name">
                   <input
                     id="ra-name"
@@ -128,22 +166,28 @@ export function RequestAccountForm({
                   />
                 </Field>
 
-                <Field label={t("requestAccount.rollNo")} htmlFor="ra-roll">
-                  <input
-                    id="ra-roll"
-                    value={studentId}
-                    onChange={(e) => setStudentId(e.target.value)}
-                    placeholder={t("requestAccount.rollNoPlaceholder")}
-                    required
-                    className={inputClass}
-                  />
-                </Field>
+                {/* Student sign in by roll number (required). */}
+                {isStudent && (
+                  <Field label={t("requestAccount.rollNo")} htmlFor="ra-roll">
+                    <input
+                      id="ra-roll"
+                      value={studentId}
+                      onChange={(e) => setStudentId(e.target.value)}
+                      placeholder={t("requestAccount.rollNoPlaceholder")}
+                      required
+                      className={inputClass}
+                    />
+                  </Field>
+                )}
 
                 <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
                   <Field
                     label={t("requestAccount.email")}
                     htmlFor="ra-email"
-                    optional={t("requestAccount.optional")}
+                    // Staff authenticate by email → required; optional for students.
+                    optional={
+                      isStudent ? t("requestAccount.optional") : undefined
+                    }
                   >
                     <input
                       id="ra-email"
@@ -151,6 +195,7 @@ export function RequestAccountForm({
                       value={email}
                       onChange={(e) => setEmail(e.target.value)}
                       placeholder={t("requestAccount.emailPlaceholder")}
+                      required={!isStudent}
                       autoComplete="email"
                       className={inputClass}
                     />
@@ -171,38 +216,83 @@ export function RequestAccountForm({
                   </Field>
                 </div>
 
-                <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
-                  <Field label={t("requestAccount.course")} htmlFor="ra-course">
-                    <Select
-                      id="ra-course"
-                      value={course}
-                      onChange={setCourse}
-                      options={courseOptions}
-                      placeholder={t("requestAccount.selectPlaceholder")}
-                    />
-                  </Field>
-                  <Field label={t("requestAccount.class")} htmlFor="ra-class">
-                    <Select
-                      id="ra-class"
-                      value={className}
-                      onChange={setClassName}
-                      options={classOptions}
-                      placeholder={t("requestAccount.selectPlaceholder")}
-                    />
-                  </Field>
-                  <Field
-                    label={t("requestAccount.practicalBatch")}
-                    htmlFor="ra-batch"
-                  >
-                    <Select
-                      id="ra-batch"
-                      value={practicalBatch}
-                      onChange={setPracticalBatch}
-                      options={batchOptions}
-                      placeholder={t("requestAccount.selectPlaceholder")}
-                    />
-                  </Field>
-                </div>
+                {/* Student-only academic fields. */}
+                {isStudent && (
+                  <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+                    <Field label={t("requestAccount.course")} htmlFor="ra-course">
+                      <Select
+                        id="ra-course"
+                        value={course}
+                        onChange={setCourse}
+                        options={courseOptions}
+                        placeholder={t("requestAccount.selectPlaceholder")}
+                      />
+                    </Field>
+                    <Field label={t("requestAccount.class")} htmlFor="ra-class">
+                      <Select
+                        id="ra-class"
+                        value={className}
+                        onChange={setClassName}
+                        options={classOptions}
+                        placeholder={t("requestAccount.selectPlaceholder")}
+                      />
+                    </Field>
+                    <Field
+                      label={t("requestAccount.practicalBatch")}
+                      htmlFor="ra-batch"
+                    >
+                      <Select
+                        id="ra-batch"
+                        value={practicalBatch}
+                        onChange={setPracticalBatch}
+                        options={batchOptions}
+                        placeholder={t("requestAccount.selectPlaceholder")}
+                      />
+                    </Field>
+                  </div>
+                )}
+
+                {/* Staff-only professional fields. */}
+                {!isStudent && (
+                  <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+                    <Field
+                      label={t("requestAccount.employeeId")}
+                      htmlFor="ra-empid"
+                    >
+                      <input
+                        id="ra-empid"
+                        value={employeeId}
+                        onChange={(e) => setEmployeeId(e.target.value)}
+                        placeholder={t("requestAccount.employeeIdPlaceholder")}
+                        className={inputClass}
+                      />
+                    </Field>
+                    <Field
+                      label={t("requestAccount.department")}
+                      htmlFor="ra-dept"
+                    >
+                      <input
+                        id="ra-dept"
+                        value={department}
+                        onChange={(e) => setDepartment(e.target.value)}
+                        placeholder={t("requestAccount.departmentPlaceholder")}
+                        className={inputClass}
+                      />
+                    </Field>
+                    <Field
+                      label={t("requestAccount.designation")}
+                      htmlFor="ra-desig"
+                    >
+                      <input
+                        id="ra-desig"
+                        value={designation}
+                        onChange={(e) => setDesignation(e.target.value)}
+                        placeholder={t("requestAccount.designationPlaceholder")}
+                        className={inputClass}
+                      />
+                    </Field>
+                  </div>
+                )}
 
                 <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
                   <Field

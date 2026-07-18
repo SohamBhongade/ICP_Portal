@@ -12,7 +12,8 @@ import { getDropdownOptions } from "@/lib/edit-mode/settings";
 import { RequestsContent, type PendingRequest } from "./RequestsContent";
 
 export default async function RequestsPage() {
-  await requireCapability("manageUsers");
+  // Approvals console is Admin + Principal only (not Office Admin).
+  await requireCapability("approveRequests");
   const [rows, courseOpts, classOpts, batchOpts] = await Promise.all([
     db
       .select({
@@ -25,6 +26,9 @@ export default async function RequestsPage() {
         course: users.course,
         className: users.className,
         practicalBatch: users.practicalBatch,
+        employeeId: users.employeeId,
+        department: users.department,
+        designation: users.designation,
         createdAt: users.createdAt,
       })
       .from(users)

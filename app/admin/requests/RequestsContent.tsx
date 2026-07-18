@@ -19,6 +19,17 @@ import type { Role } from "@/lib/auth/permissions";
 
 type Item = { value: string; label: string };
 
+// Per-role badge label so the approver sees exactly which role was requested
+// (e.g. "Principal" vs a generic "Staff request").
+const ROLE_BADGE_KEY: Record<Role, string> = {
+  admin: "onboarding.roleAdmin",
+  principal: "onboarding.rolePrincipal",
+  "office admin": "onboarding.roleOfficeAdmin",
+  faculty: "onboarding.roleFaculty",
+  staff: "onboarding.roleStaff",
+  student: "onboarding.roleStudent",
+};
+
 export type PendingRequest = {
   id: number;
   role: Role;
@@ -29,6 +40,9 @@ export type PendingRequest = {
   course: string | null;
   className: string | null;
   practicalBatch: string | null;
+  employeeId: string | null;
+  department: string | null;
+  designation: string | null;
   createdAt: number;
 };
 
@@ -162,6 +176,9 @@ function RequestCard({
   const [practicalBatch, setPracticalBatch] = useState(
     request.practicalBatch ?? "",
   );
+  const [employeeId, setEmployeeId] = useState(request.employeeId ?? "");
+  const [department, setDepartment] = useState(request.department ?? "");
+  const [designation, setDesignation] = useState(request.designation ?? "");
 
   const isStaff = request.role !== "student";
   const canApprove =
@@ -193,6 +210,9 @@ function RequestCard({
         course,
         className,
         practicalBatch,
+        employeeId,
+        department,
+        designation,
       });
       setAction(null);
       if (result.ok) {
@@ -231,9 +251,7 @@ function RequestCard({
               isStaff ? "bg-mint text-teal" : "bg-lavender text-primary"
             }`}
           >
-            {isStaff
-              ? t("requests.staffRequest")
-              : t("requests.studentRequest")}
+            {t(ROLE_BADGE_KEY[request.role])}
           </span>
           <span className="rounded-full bg-canvas px-2 py-0.5 text-xs font-medium text-muted">
             {t("onboarding.statusPending")}
@@ -300,6 +318,31 @@ function RequestCard({
                 onChange={setPracticalBatch}
                 options={batchOptions}
                 placeholder={t("requests.selectPlaceholder")}
+              />
+            </CardField>
+          </>
+        )}
+        {isStaff && (
+          <>
+            <CardField label={t("requests.employeeId")}>
+              <input
+                value={employeeId}
+                onChange={(e) => setEmployeeId(e.target.value)}
+                className={inputClass}
+              />
+            </CardField>
+            <CardField label={t("requests.department")}>
+              <input
+                value={department}
+                onChange={(e) => setDepartment(e.target.value)}
+                className={inputClass}
+              />
+            </CardField>
+            <CardField label={t("requests.designation")}>
+              <input
+                value={designation}
+                onChange={(e) => setDesignation(e.target.value)}
+                className={inputClass}
               />
             </CardField>
           </>

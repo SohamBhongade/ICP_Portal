@@ -32,8 +32,8 @@ const ADMIN_PASSWORD = "Admin@123"; // dev-only; change in production
 const ADMIN_NAME = "ICP Administrator";
 
 // --- Demo staff (dev-only): one account per non-admin staff role ---
-const STAFF_DEMOS: { email: string; password: string; name: string; role: "principle" | "office admin" | "faculty" | "staff" }[] = [
-  { email: "principle@icp.local", password: "Principle@123", name: "Demo Principle", role: "principle" },
+const STAFF_DEMOS: { email: string; password: string; name: string; role: "principal" | "office admin" | "faculty" | "staff" }[] = [
+  { email: "principal@icp.local", password: "Principal@123", name: "Demo Principal", role: "principal" },
   { email: "officeadmin@icp.local", password: "Office@123", name: "Demo Office Admin", role: "office admin" },
   { email: "faculty@icp.local", password: "Faculty@123", name: "Demo Faculty", role: "faculty" },
   { email: "staff@icp.local", password: "Staff@123", name: "Demo Staff", role: "staff" },

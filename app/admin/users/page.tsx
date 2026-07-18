@@ -10,6 +10,10 @@ import { users } from "@/db/schema";
 import { requireCapability } from "@/lib/auth";
 import { assignableRoles, can, type Role } from "@/lib/auth/permissions";
 import { getDropdownOptions } from "@/lib/edit-mode/settings";
+import {
+  sanitizeUsersTableLayout,
+  type UiPreferences,
+} from "@/lib/table-layout";
 import { UsersContent } from "./UsersContent";
 
 export default async function UsersPage() {
@@ -25,7 +29,9 @@ export default async function UsersPage() {
         role: users.role,
         course: users.course,
         className: users.className,
+        practicalBatch: users.practicalBatch,
         status: users.status,
+        createdAt: users.createdAt,
       })
       .from(users)
       .orderBy(desc(users.createdAt)),
@@ -37,6 +43,13 @@ export default async function UsersPage() {
   const toItems = (opts: { id: number; value: string; label: string }[]) =>
     opts.map((o) => ({ id: o.id, value: o.value, label: o.label }));
 
+  // Initialize the grid from the admin's saved layout (falls back to the full
+  // default set when they've never customized it). Sanitized so a stale blob
+  // that predates a column change can never break rendering.
+  const savedLayout = sanitizeUsersTableLayout(
+    (me.uiPreferences as UiPreferences | null)?.usersTable,
+  );
+
   return (
     <UsersContent
       users={rows}
@@ -44,7 +57,10 @@ export default async function UsersPage() {
       classOptions={toItems(classOpts)}
       batchOptions={toItems(batchOpts)}
       canDelete={can(me.role as Role, "deleteUsers")}
+      canEditStudents={can(me.role as Role, "manageUsers")}
+      currentUserId={me.id}
       assignableRoles={assignableRoles(me.role as Role)}
+      savedLayout={savedLayout}
     />
   );
 }

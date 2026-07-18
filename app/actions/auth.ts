@@ -78,28 +78,48 @@ export async function logoutAction(): Promise<void> {
 
 // ---------- Public self-service account requests ----------
 //
-// STUDENTS ONLY. Staff accounts (faculty/office admin/principle/admin) are never
-// self-served — they are created inside the Users console by an authorised staff
-// member. A student request lands as status='pending' with a hashed password
-// they chose, so login can show the friendly "awaiting approval" message (login
-// requires a passwordHash before it reads status). Admin/Principle/Office Admin
-// then review it in /admin/requests, fix any typos, and flip it to 'active'.
+// DYNAMIC by role. A request lands as status='pending' with a hashed password
+// the applicant chose, so login can show the friendly "awaiting approval"
+// message (login requires a passwordHash before it reads status). Admin /
+// Principal then review it in /admin/requests, fix any typos, and flip it to
+// 'active'. The field set depends on the requested role:
+//   - student            -> roll number + course / class / practical batch
+//   - principal/office admin/faculty/staff -> email + employee ID / department /
+//                            designation (email is their login identifier)
+// Admin can NEVER be self-requested — that role is created internally only.
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const MIN_PASSWORD = 6;
 
+// Roles the public form may request: every role EXCEPT admin. This is the
+// server-side allow-list — never trust the client's role string.
+const SELF_SERVICE_ROLES: readonly Role[] = [
+  "student",
+  "principal",
+  "office admin",
+  "faculty",
+  "staff",
+];
+
 export type RequestAccountInput = {
+  role: Role;
   fullName: string;
   studentId?: string;
   email?: string;
   phone?: string;
+  // Student-only
   course?: string;
   className?: string;
   practicalBatch?: string;
+  // Staff-only professional details
+  employeeId?: string;
+  department?: string;
+  designation?: string;
   password: string;
 };
 
 export type RequestAccountError =
+  | "invalidRole"
   | "missingName"
   | "missingRollNo"
   | "missingEmail"
@@ -116,6 +136,14 @@ export type RequestAccountResult =
 export async function requestAccountAction(
   input: RequestAccountInput,
 ): Promise<RequestAccountResult> {
+  // Guard the role first — an unknown value or a self-requested "admin" is
+  // rejected outright before anything is written.
+  if (!SELF_SERVICE_ROLES.includes(input.role)) {
+    return { ok: false, error: "invalidRole" };
+  }
+  const role = input.role;
+  const isStudent = role === "student";
+
   const fullName = input.fullName?.trim() ?? "";
   const studentId = input.studentId?.trim() || undefined;
   const email = input.email?.trim().toLowerCase() || undefined;
@@ -123,10 +151,19 @@ export async function requestAccountAction(
   const password = input.password ?? "";
 
   if (!fullName) return { ok: false, error: "missingName" };
-  if (!studentId) return { ok: false, error: "missingRollNo" };
-  if (email && !EMAIL_RE.test(email)) {
-    return { ok: false, error: "invalidEmail" };
+
+  if (isStudent) {
+    // Students sign in by roll number; email is optional.
+    if (!studentId) return { ok: false, error: "missingRollNo" };
+    if (email && !EMAIL_RE.test(email)) {
+      return { ok: false, error: "invalidEmail" };
+    }
+  } else {
+    // Staff roles sign in by email — required and validated.
+    if (!email) return { ok: false, error: "missingEmail" };
+    if (!EMAIL_RE.test(email)) return { ok: false, error: "invalidEmail" };
   }
+
   if (password.length < MIN_PASSWORD) {
     return { ok: false, error: "weakPassword" };
   }
@@ -137,14 +174,24 @@ export async function requestAccountAction(
       .insert(users)
       .values({
         fullName,
-        studentId,
+        // Only the role-appropriate identity fields are persisted.
+        studentId: isStudent ? studentId : undefined,
         email,
         phone,
-        role: "student",
+        role,
         status: "pending",
-        course: input.course?.trim() || undefined,
-        className: input.className?.trim() || undefined,
-        practicalBatch: input.practicalBatch?.trim() || undefined,
+        // Student-only academic fields.
+        course: isStudent ? input.course?.trim() || undefined : undefined,
+        className: isStudent ? input.className?.trim() || undefined : undefined,
+        practicalBatch: isStudent
+          ? input.practicalBatch?.trim() || undefined
+          : undefined,
+        // Staff-only professional fields.
+        employeeId: isStudent ? undefined : input.employeeId?.trim() || undefined,
+        department: isStudent ? undefined : input.department?.trim() || undefined,
+        designation: isStudent
+          ? undefined
+          : input.designation?.trim() || undefined,
         passwordHash,
       })
       .onConflictDoNothing()

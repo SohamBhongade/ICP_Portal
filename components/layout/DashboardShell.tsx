@@ -44,7 +44,7 @@ const STAFF_NAV: NavConfig[] = [
     icon: LayoutDashboard,
     show: (c) => has(c, "manageUsers") || has(c, "fees") || has(c, "settings"),
   },
-  { href: "/admin/requests", key: "requests", icon: UserPlus, show: (c) => has(c, "manageUsers") },
+  { href: "/admin/requests", key: "requests", icon: UserPlus, show: (c) => has(c, "approveRequests") },
   { href: "/admin/users", key: "users", icon: Users, show: (c) => has(c, "manageUsers") },
   { href: "/teacher/attendance", key: "recordAttendance", icon: CalendarCheck, show: (c) => has(c, "attendance") },
   { href: "/admin/attendance", key: "attendanceOverview", icon: ClipboardList, show: (c) => has(c, "settings") },

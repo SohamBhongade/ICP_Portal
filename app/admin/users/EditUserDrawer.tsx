@@ -1,10 +1,13 @@
 "use client";
 
-// Manual single-account creation — a right-hand slide-over drawer.
+// Edit an existing user — a right-hand slide-over, mirroring CreateUserDrawer.
 //
-// Role toggle switches the field set: students get a roll number + Course /
-// Class / Practical-batch (sourced from <EditableDropdown>, so Edit Mode can
-// manage those options inline); staff (teacher/admin) only need an email.
+// Prepopulated from the selected row. The account type (role) is shown read-only
+// here — changing roles is an escalation surface owned by the create path, not
+// this edit form. Academic fields (Course / Class / Practical batch) only apply
+// to students, matching how the row was created. Status is editable EXCEPT on
+// your own account (a self-demotion would lock you out); the server enforces the
+// same rule regardless of what the client sends.
 
 import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
@@ -15,13 +18,9 @@ import {
   EditableDropdown,
   type DropdownOptionItem,
 } from "@/components/edit-mode/EditableDropdown";
-import {
-  createUserAction,
-  type ActionError,
-  type OnboardRole,
-} from "@/app/actions/onboarding";
+import { updateUserAction, type ActionError } from "@/app/actions/onboarding";
 import type { Role } from "@/lib/auth/permissions";
-import type { ToastKind } from "./UsersContent";
+import type { ToastKind, UserRow } from "./UsersContent";
 
 // Translation keys per role (mirrors ROLE_LABEL in UsersContent).
 const ROLE_LABEL_KEY: Record<Role, string> = {
@@ -33,46 +32,53 @@ const ROLE_LABEL_KEY: Record<Role, string> = {
   student: "onboarding.roleStudent",
 };
 
-export function CreateUserDrawer({
+const STATUSES: UserRow["status"][] = ["active", "pending", "rejected"];
+const STATUS_LABEL_KEY: Record<UserRow["status"], string> = {
+  active: "onboarding.statusActive",
+  pending: "onboarding.statusPending",
+  rejected: "onboarding.statusRejected",
+};
+
+export function EditUserDrawer({
+  user,
+  isSelf,
   courseOptions,
   classOptions,
   batchOptions,
-  assignableRoles,
   onClose,
   notify,
 }: {
+  user: UserRow;
+  // True when editing your own account — status is then locked (self-lockout guard).
+  isSelf: boolean;
   courseOptions: DropdownOptionItem[];
   classOptions: DropdownOptionItem[];
   batchOptions: DropdownOptionItem[];
-  assignableRoles: Role[];
   onClose: () => void;
   notify: (kind: ToastKind, message: string) => void;
 }) {
   const t = useT();
   const router = useRouter();
   const [pending, startTransition] = useTransition();
-  const [error, setError] = useState<ActionError | null>(null);
+  const [error, setError] = useState<ActionError | "notFound" | null>(null);
 
-  // Default to student when allowed, else the first assignable role.
-  const [role, setRole] = useState<OnboardRole>(
-    assignableRoles.includes("student") ? "student" : assignableRoles[0],
-  );
-  const [fullName, setFullName] = useState("");
-  const [email, setEmail] = useState("");
-  const [phone, setPhone] = useState("");
-  const [studentId, setStudentId] = useState("");
-  const [course, setCourse] = useState("");
-  const [className, setClassName] = useState("");
-  const [practicalBatch, setPracticalBatch] = useState("");
+  const isStudent = user.role === "student";
 
-  const isStudent = role === "student";
+  const [fullName, setFullName] = useState(user.fullName);
+  const [email, setEmail] = useState(user.email ?? "");
+  const [phone, setPhone] = useState(user.phone ?? "");
+  const [studentId, setStudentId] = useState(user.studentId ?? "");
+  const [course, setCourse] = useState(user.course ?? "");
+  const [className, setClassName] = useState(user.className ?? "");
+  const [practicalBatch, setPracticalBatch] = useState(user.practicalBatch ?? "");
+  const [status, setStatus] = useState<UserRow["status"]>(user.status);
 
   const submit = (e: React.FormEvent) => {
     e.preventDefault();
     setError(null);
     startTransition(async () => {
-      const result = await createUserAction({
-        role,
+      const result = await updateUserAction({
+        id: user.id,
         fullName,
         email,
         phone,
@@ -80,24 +86,24 @@ export function CreateUserDrawer({
         course,
         className,
         practicalBatch,
+        status,
       });
       if (result.ok) {
         notify(
           "success",
-          t("onboarding.toast.created", { name: fullName.trim() }),
+          t("onboarding.toast.updated", { name: fullName.trim() }),
         );
         router.refresh();
         onClose();
       } else {
         setError(result.error);
-        notify("error", t("onboarding.toast.createFailed"));
+        notify("error", t("onboarding.toast.updateFailed"));
       }
     });
   };
 
   return (
     <div className="fixed inset-0 z-40 flex justify-end">
-      {/* Overlay */}
       <button
         type="button"
         aria-label={t("onboarding.create.cancel")}
@@ -105,7 +111,6 @@ export function CreateUserDrawer({
         className="absolute inset-0 bg-ink/30"
       />
 
-      {/* Panel */}
       <div
         role="dialog"
         aria-modal="true"
@@ -113,7 +118,7 @@ export function CreateUserDrawer({
       >
         <div className="flex items-center justify-between border-b border-line px-5 py-4">
           <h2 className="text-base font-semibold text-ink">
-            <Editable tKey="onboarding.create.title" />
+            <Editable tKey="onboarding.editUser.title" />
           </h2>
           <button
             type="button"
@@ -126,24 +131,16 @@ export function CreateUserDrawer({
         </div>
 
         <form onSubmit={submit} className="flex flex-1 flex-col gap-4 p-5">
-          <Field label={t("onboarding.create.roleLabel")} htmlFor="cu-role">
-            <select
-              id="cu-role"
-              value={role}
-              onChange={(e) => setRole(e.target.value as OnboardRole)}
-              className="w-full rounded-md border border-line bg-surface px-3 py-2 text-sm text-ink focus:border-teal"
-            >
-              {assignableRoles.map((r) => (
-                <option key={r} value={r}>
-                  {t(ROLE_LABEL_KEY[r])}
-                </option>
-              ))}
-            </select>
+          {/* Role is read-only here (not an editable escalation surface). */}
+          <Field label={t("onboarding.editUser.roleLabel")}>
+            <div className="rounded-md border border-line bg-canvas px-3 py-2 text-sm text-muted">
+              {t(ROLE_LABEL_KEY[user.role])}
+            </div>
           </Field>
 
-          <Field label={t("onboarding.create.fullName")} htmlFor="cu-name">
+          <Field label={t("onboarding.create.fullName")} htmlFor="eu-name">
             <input
-              id="cu-name"
+              id="eu-name"
               value={fullName}
               onChange={(e) => setFullName(e.target.value)}
               placeholder={t("onboarding.create.fullNamePlaceholder")}
@@ -153,9 +150,9 @@ export function CreateUserDrawer({
           </Field>
 
           {isStudent && (
-            <Field label={t("onboarding.create.rollNo")} htmlFor="cu-roll">
+            <Field label={t("onboarding.create.rollNo")} htmlFor="eu-roll">
               <input
-                id="cu-roll"
+                id="eu-roll"
                 value={studentId}
                 onChange={(e) => setStudentId(e.target.value)}
                 placeholder={t("onboarding.create.rollNoPlaceholder")}
@@ -167,11 +164,11 @@ export function CreateUserDrawer({
 
           <Field
             label={t("onboarding.create.email")}
-            htmlFor="cu-email"
+            htmlFor="eu-email"
             optional={isStudent ? t("onboarding.create.optional") : undefined}
           >
             <input
-              id="cu-email"
+              id="eu-email"
               type="email"
               value={email}
               onChange={(e) => setEmail(e.target.value)}
@@ -183,11 +180,11 @@ export function CreateUserDrawer({
 
           <Field
             label={t("onboarding.create.phone")}
-            htmlFor="cu-phone"
+            htmlFor="eu-phone"
             optional={t("onboarding.create.optional")}
           >
             <input
-              id="cu-phone"
+              id="eu-phone"
               value={phone}
               onChange={(e) => setPhone(e.target.value)}
               placeholder={t("onboarding.create.phonePlaceholder")}
@@ -227,15 +224,32 @@ export function CreateUserDrawer({
             </>
           )}
 
+          <Field label={t("onboarding.editUser.status")} htmlFor="eu-status">
+            <select
+              id="eu-status"
+              value={status}
+              onChange={(e) => setStatus(e.target.value as UserRow["status"])}
+              disabled={isSelf}
+              className={`${inputClass} disabled:cursor-not-allowed disabled:opacity-60`}
+            >
+              {STATUSES.map((s) => (
+                <option key={s} value={s}>
+                  {t(STATUS_LABEL_KEY[s])}
+                </option>
+              ))}
+            </select>
+            {isSelf && (
+              <p className="mt-1 text-xs text-muted">
+                {t("onboarding.editUser.selfNote")}
+              </p>
+            )}
+          </Field>
+
           {error && (
             <p className="rounded-md border border-danger/40 bg-lavender px-3 py-2 text-sm text-danger">
               {t(`onboarding.errors.${error}`)}
             </p>
           )}
-
-          <p className="text-xs text-muted">
-            {t("onboarding.create.tempPasswordNote")}
-          </p>
 
           <div className="mt-auto flex items-center justify-end gap-2 border-t border-line pt-4">
             <button
@@ -251,8 +265,8 @@ export function CreateUserDrawer({
               className="rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary-hover disabled:opacity-50"
             >
               {pending
-                ? t("onboarding.create.submitting")
-                : t("onboarding.create.submit")}
+                ? t("onboarding.editUser.submitting")
+                : t("onboarding.editUser.submit")}
             </button>
           </div>
         </form>

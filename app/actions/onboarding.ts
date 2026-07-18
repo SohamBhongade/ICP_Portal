@@ -2,7 +2,7 @@
 
 // Phase 8 — Onboarding server actions.
 //
-// Entry points require the `manageUsers` capability (admin, principle, office
+// Entry points require the `manageUsers` capability (admin, principal, office
 // admin), re-verified server-side on every call — never trust the client. The
 // exception is deleteUserAction, which requires `deleteUsers` (admin only).
 //   - createUserAction:         manual single student / staff creation
@@ -86,6 +86,15 @@ const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 /** Returns the caller if they may manage users, else null. */
 async function assertManageUsers() {
   return currentUserWithCapability("manageUsers");
+}
+
+/**
+ * Returns the caller if they may APPROVE/REJECT account requests, else null.
+ * This is a stricter gate than manageUsers — Admin + Principal only. Office
+ * Admin (who holds manageUsers) is intentionally blocked from approvals.
+ */
+async function assertApproveRequests() {
+  return currentUserWithCapability("approveRequests");
 }
 
 /** Temporary first-login password. See file header for the pattern. */
@@ -254,9 +263,14 @@ export type ApproveRequestInput = {
   studentId?: string;
   email?: string;
   phone?: string;
+  // Student-only
   course?: string;
   className?: string;
   practicalBatch?: string;
+  // Staff-only professional details
+  employeeId?: string;
+  department?: string;
+  designation?: string;
 };
 
 export type RequestResult =
@@ -272,7 +286,8 @@ function revalidateRequestViews() {
 export async function approveRequestAction(
   input: ApproveRequestInput,
 ): Promise<RequestResult> {
-  if (!(await assertManageUsers())) return { ok: false, error: "forbidden" };
+  // Approvals are Admin + Principal only (stricter than manageUsers).
+  if (!(await assertApproveRequests())) return { ok: false, error: "forbidden" };
 
   const isStaff = input.role !== "student";
   const fullName = input.fullName?.trim() ?? "";
@@ -302,6 +317,10 @@ export async function approveRequestAction(
         course: isStaff ? null : input.course?.trim() || null,
         className: isStaff ? null : input.className?.trim() || null,
         practicalBatch: isStaff ? null : input.practicalBatch?.trim() || null,
+        // Professional details are the mirror image — staff keep them, students clear them.
+        employeeId: isStaff ? input.employeeId?.trim() || null : null,
+        department: isStaff ? input.department?.trim() || null : null,
+        designation: isStaff ? input.designation?.trim() || null : null,
         status: "active",
         updatedAt: new Date(),
       })
@@ -315,6 +334,105 @@ export async function approveRequestAction(
   }
 
   revalidateRequestViews();
+  return { ok: true };
+}
+
+// ---------- Edit user details (manageUsers: admin / principal / office admin) ----------
+//
+// Powers the per-row "Edit" button on the Users grid. Same capability gate as
+// creation (`manageUsers`), re-verified here on the server — faculty, staff, and
+// students can never reach it. The user's ROLE is authoritative from the DB, not
+// the payload, so a forged request can't smuggle academic fields onto a staff
+// account or vice-versa. Role itself is intentionally NOT editable here (that's
+// an escalation surface handled by the create/anti-escalation path).
+
+export type UpdateUserInput = {
+  id: number;
+  fullName: string;
+  email?: string;
+  phone?: string;
+  studentId?: string; // roll number — students only
+  course?: string;
+  className?: string;
+  practicalBatch?: string;
+  status: "pending" | "active" | "rejected";
+};
+
+export type UpdateUserResult =
+  | { ok: true }
+  | { ok: false; error: ActionError | "notFound" };
+
+export async function updateUserAction(
+  input: UpdateUserInput,
+): Promise<UpdateUserResult> {
+  const actor = await assertManageUsers();
+  if (!actor) return { ok: false, error: "forbidden" };
+
+  // Load the CURRENT role/status from the DB — never trust the client for which
+  // field set applies or for the user's identity.
+  const [existing] = await db
+    .select({ id: users.id, role: users.role, status: users.status })
+    .from(users)
+    .where(eq(users.id, input.id))
+    .limit(1);
+  if (!existing) return { ok: false, error: "notFound" };
+
+  const isStaff = existing.role !== "student";
+  const fullName = input.fullName?.trim() ?? "";
+  const email = input.email?.trim().toLowerCase() || undefined;
+  const studentId = input.studentId?.trim() || undefined;
+
+  if (!fullName) return { ok: false, error: "missingName" };
+  if (isStaff) {
+    // Staff sign in by email — required.
+    if (!email) return { ok: false, error: "missingEmail" };
+    if (!EMAIL_RE.test(email)) return { ok: false, error: "invalidEmail" };
+  } else {
+    if (!studentId) return { ok: false, error: "missingRollNo" };
+    if (email && !EMAIL_RE.test(email)) {
+      return { ok: false, error: "invalidEmail" };
+    }
+  }
+
+  // Normalize + validate the course for students (mirrors create/approve).
+  let course: string | null = null;
+  if (!isStaff) {
+    const courseRes = resolveCourse(input.course);
+    if (courseRes.status === "invalid") return { ok: false, error: "invalidCourse" };
+    course = courseRes.status === "ok" ? courseRes.value : null;
+  }
+
+  // Whitelist the status; never let an actor change their OWN status (a demotion
+  // to pending/rejected would lock them out of the console they're using).
+  const allowed = ["pending", "active", "rejected"] as const;
+  const requested = allowed.includes(input.status) ? input.status : existing.status;
+  const nextStatus = actor.id === input.id ? existing.status : requested;
+
+  try {
+    const res = await db
+      .update(users)
+      .set({
+        fullName,
+        email: email ?? null,
+        phone: input.phone?.trim() || null,
+        studentId: isStaff ? null : studentId,
+        course: isStaff ? null : course,
+        className: isStaff ? null : input.className?.trim() || null,
+        practicalBatch: isStaff ? null : input.practicalBatch?.trim() || null,
+        status: nextStatus,
+        updatedAt: new Date(),
+      })
+      .where(eq(users.id, input.id))
+      .returning({ id: users.id });
+
+    if (res.length === 0) return { ok: false, error: "notFound" };
+  } catch {
+    // A UNIQUE clash on the edited studentId/email surfaces here.
+    return { ok: false, error: "duplicate" };
+  }
+
+  revalidatePath("/admin/users");
+  revalidatePath("/admin");
   return { ok: true };
 }
 
@@ -391,7 +509,8 @@ export async function deleteUserAction(
 export async function rejectRequestAction(
   id: number,
 ): Promise<RequestResult> {
-  if (!(await assertManageUsers())) return { ok: false, error: "forbidden" };
+  // Rejections are Admin + Principal only (stricter than manageUsers).
+  if (!(await assertApproveRequests())) return { ok: false, error: "forbidden" };
 
   const res = await db
     .update(users)

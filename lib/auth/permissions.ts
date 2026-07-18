@@ -9,18 +9,22 @@
 // so the matrix can never drift apart between UI and enforcement.
 //
 // University matrix (Phase 2):
-//   role          settings  manageUsers  deleteUsers  fees  attendance
-//   admin            ✓           ✓            ✓         ✓        ✓
-//   principle        ✓           ✓            ✗         ✓        ✓
-//   office admin     ✗           ✓            ✗         ✓        ✗
-//   faculty          ✗           ✗            ✗         ✗        ✓
-//   staff            ✗           ✗            ✗         ✗        ✓
+//   role          settings  manageUsers  approveRequests  deleteUsers  fees  attendance
+//   admin            ✓           ✓              ✓              ✓         ✓        ✓
+//   principal        ✓           ✓              ✓              ✗         ✓        ✓
+//   office admin     ✗           ✓              ✗              ✗         ✓        ✗
+//   faculty          ✗           ✗              ✗              ✗         ✗        ✓
+//   staff            ✗           ✗              ✗              ✗         ✗        ✓
 //   student          — (no staff-console access)
+//
+// NOTE: manageUsers (add/edit users) and approveRequests (accept/reject pending
+// self-service signups) are DISTINCT. Office Admin can manage the user roster but
+// must NOT approve account requests — that stays with Admin + Principal only.
 
 export type Role =
   | "admin"
   | "office admin"
-  | "principle"
+  | "principal"
   | "staff"
   | "faculty"
   | "student";
@@ -28,14 +32,15 @@ export type Role =
 // The atomic permissions the matrix is expressed in.
 export type Capability =
   | "settings" // view Settings + Edit Mode (dropdowns / text overrides)
-  | "manageUsers" // add users + review account requests
+  | "manageUsers" // add + edit users in the Users console
+  | "approveRequests" // accept/reject pending self-service account requests
   | "deleteUsers" // permanently delete a user (admin only)
   | "fees" // view + post fee-ledger transactions
   | "attendance"; // record attendance
 
 const ROLE_CAPABILITIES: Record<Role, readonly Capability[]> = {
-  admin: ["settings", "manageUsers", "deleteUsers", "fees", "attendance"],
-  principle: ["settings", "manageUsers", "fees", "attendance"],
+  admin: ["settings", "manageUsers", "approveRequests", "deleteUsers", "fees", "attendance"],
+  principal: ["settings", "manageUsers", "approveRequests", "fees", "attendance"],
   "office admin": ["manageUsers", "fees"],
   faculty: ["attendance"],
   staff: ["attendance"],
@@ -65,10 +70,10 @@ export function canAny(
 
 // Anti-escalation ranking for user creation. A user may only mint accounts of
 // STRICTLY lower rank than themselves (admins may also mint fellow admins), so
-// an Office Admin can never create a Principle/Admin, etc.
+// an Office Admin can never create a Principal/Admin, etc.
 const ROLE_RANK: Record<Role, number> = {
   admin: 4,
-  principle: 3,
+  principal: 3,
   "office admin": 2,
   faculty: 1,
   staff: 1,
@@ -101,7 +106,7 @@ const ADMIN_ROUTE_CAPS: { prefix: string; capability: Capability }[] = [
   { prefix: "/admin/settings", capability: "settings" },
   { prefix: "/admin/support", capability: "settings" },
   { prefix: "/admin/attendance", capability: "settings" }, // read-only monitoring (management view)
-  { prefix: "/admin/requests", capability: "manageUsers" },
+  { prefix: "/admin/requests", capability: "approveRequests" },
   { prefix: "/admin/users", capability: "manageUsers" },
   { prefix: "/admin/fees", capability: "fees" },
 ];
@@ -122,7 +127,7 @@ export function landingPath(role: Role): string {
  * run in every server action + sensitive page guard.
  */
 export function canAccessPath(role: Role, pathname: string): boolean {
-  // Attendance recorder console (Faculty/Staff/Principle/Admin).
+  // Attendance recorder console (Faculty/Staff/Principal/Admin).
   if (pathname === "/teacher" || pathname.startsWith("/teacher/")) {
     return can(role, "attendance");
   }

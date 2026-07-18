@@ -1,5 +1,5 @@
 // Attendance recorder console — guarded by the `attendance` capability
-// (admin, principle, faculty, staff). Formerly the "teacher" area.
+// (admin, principal, faculty, staff). Formerly the "teacher" area.
 
 import { requireCapability } from "@/lib/auth";
 import { can, type Role } from "@/lib/auth/permissions";

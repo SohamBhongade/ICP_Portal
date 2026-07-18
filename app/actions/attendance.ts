@@ -3,7 +3,7 @@
 // Phase 9 — Attendance server actions.
 //
 // Both entry points are gated by requireCapability("attendance") — a strict
-// server-side check (admin, principle, faculty, staff). Students never reach
+// server-side check (admin, principal, faculty, staff). Students never reach
 // these.
 //
 //   - fetchStudentsAction:     dynamic roster for a course/class/(batch)

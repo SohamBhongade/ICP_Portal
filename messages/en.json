@@ -87,7 +87,7 @@
     "roleFaculty": "Faculty",
     "roleStaff": "Staff",
     "roleOfficeAdmin": "Office Admin",
-    "rolePrinciple": "Principle",
+    "rolePrincipal": "Principal",
     "roleAdmin": "Admin",
     "colName": "Name",
     "colRollNo": "Roll No.",
@@ -97,7 +97,30 @@
     "colCourse": "Course",
     "colClass": "Class",
     "colStatus": "Status",
+    "colJoined": "Joined",
     "colActions": "Actions",
+    "editColumns": "Edit columns",
+    "columns": {
+      "title": "Customize columns",
+      "hint": "Toggle columns on or off and use the arrows to reorder them. Your layout is saved to your account and follows you across devices.",
+      "moveUp": "Move up",
+      "moveDown": "Move down",
+      "restore": "Restore defaults",
+      "save": "Save layout",
+      "saving": "Saving…",
+      "needOne": "Keep at least one column visible.",
+      "saved": "Column layout saved.",
+      "saveFailed": "Couldn't save your layout. Please try again."
+    },
+    "edit": "Edit",
+    "editUser": {
+      "title": "Edit user details",
+      "roleLabel": "Account type",
+      "status": "Status",
+      "selfNote": "You can't change your own account status.",
+      "submit": "Save changes",
+      "submitting": "Saving…"
+    },
     "delete": "Delete",
     "deleting": "Deleting…",
     "deleteTitle": "Delete this account?",
@@ -161,6 +184,7 @@
       "invalidCourse": "Unrecognized course — use B.Pharm, D.Pharm, or M.Pharm",
       "duplicate": "An account with this roll number or email already exists",
       "forbidden": "You do not have permission to do this.",
+      "notFound": "That account no longer exists.",
       "unknown": "Something went wrong. Please try again."
     },
     "toast": {
@@ -171,7 +195,9 @@
       "importFailed": "Import failed. Please try again.",
       "deleted": "{name} was deleted.",
       "deleteFailed": "Could not delete the account.",
-      "cannotDeleteSelf": "You can't delete your own account."
+      "cannotDeleteSelf": "You can't delete your own account.",
+      "updated": "{name}'s details were updated.",
+      "updateFailed": "Could not save the changes."
     }
   },
   "attendance": {
@@ -362,10 +388,17 @@
   },
   "requestAccount": {
     "title": "Request an account",
-    "subtitle": "Students can request access here. An administrator will review and approve your request before you can sign in.",
+    "subtitle": "Request access here. An administrator will review and approve your request before you can sign in.",
+    "roleQuestion": "What role are you applying for?",
     "typeLabel": "Account type",
     "typeStudent": "Student",
     "typeStaff": "Staff",
+    "employeeId": "Employee / Staff ID",
+    "employeeIdPlaceholder": "e.g. EMP0042",
+    "department": "Department",
+    "departmentPlaceholder": "e.g. Pharmaceutics",
+    "designation": "Designation",
+    "designationPlaceholder": "e.g. Assistant Professor",
     "fullName": "Full name",
     "fullNamePlaceholder": "e.g. Riya Sharma",
     "rollNo": "Roll number",
@@ -390,6 +423,7 @@
     "successTitle": "Request submitted",
     "successBody": "Your account request has been received. You'll be able to sign in once an administrator approves it.",
     "errors": {
+      "invalidRole": "Please choose a valid role to apply for",
       "missingName": "Full name is required",
       "missingRollNo": "Roll number is required",
       "missingEmail": "Email is required",
@@ -417,6 +451,9 @@
     "course": "Course",
     "class": "Class",
     "practicalBatch": "Practical batch",
+    "employeeId": "Employee / Staff ID",
+    "department": "Department",
+    "designation": "Designation",
     "selectPlaceholder": "Select…",
     "approve": "Approve",
     "approving": "Approving…",
