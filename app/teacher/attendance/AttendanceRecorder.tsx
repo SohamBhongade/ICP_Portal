@@ -320,6 +320,13 @@ export function AttendanceRecorder({
 
         {roster.length > 0 && (
           <div className="flex items-center justify-end gap-3 border-t border-line px-4 py-3">
+            {!subject && (
+              <p className="text-sm text-muted">
+                {subjectOptions.length === 0
+                  ? t("attendance.subjectOptionsEmpty")
+                  : t("attendance.subjectRequired")}
+              </p>
+            )}
             <button
               type="button"
               onClick={submit}

@@ -227,6 +227,7 @@
     "submit": "Save attendance",
     "submitting": "Saving…",
     "subjectRequired": "Please choose a subject before saving.",
+    "subjectOptionsEmpty": "No subjects are configured yet. Add subject options in Edit Mode settings before saving attendance.",
     "toast": {
       "saved": "Attendance saved for {count} students.",
       "empty": "Load students before saving.",
