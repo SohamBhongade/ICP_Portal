@@ -6,6 +6,7 @@
 
 import { useActionState, useState } from "react";
 import Link from "next/link";
+import Image from "next/image";
 import { Eye, EyeOff } from "lucide-react";
 import { useT } from "@/components/i18n/LanguageProvider";
 import { loginAction, type LoginState } from "@/app/actions/auth";
@@ -19,10 +20,37 @@ export default function LoginPage() {
   const [state, formAction, pending] = useActionState(loginAction, initialState);
 
   return (
-    <main className="flex min-h-dvh flex-col items-center justify-center bg-canvas px-4 py-10">
-      <div className="w-full max-w-md">
-        {/* Brand */}
-        <div className="mb-6 flex flex-col items-center gap-4 text-center">
+    <main className="relative flex min-h-dvh flex-col items-center justify-center bg-canvas px-4 py-10">
+      {/* Campus backdrop — decorative only.
+          - `fixed inset-0` already spans the viewport (no h-screen, which
+            overshoots on mobile browsers with a collapsing URL bar).
+          - `z-0` (not -z-10) so it paints ABOVE <main>'s own bg-canvas fill;
+            a negative z-index would hide it behind that opaque background.
+          - `scale-105` + `overflow-hidden` keeps the 1px blur from feathering
+            transparent edges into the viewport corners. */}
+      <div
+        aria-hidden="true"
+        className="pointer-events-none fixed inset-0 z-0 overflow-hidden"
+      >
+        <Image
+          src="/campus-bg.webp"
+          alt=""
+          fill
+          priority
+          sizes="100vw"
+          className="scale-105 object-cover opacity-65 blur-[1px]"
+        />
+        {/* Light vignette only — top/bottom anchor the brand text and footer
+            link, while the middle stays clear so the campus reads at full
+            strength behind the card. */}
+        <div className="absolute inset-0 bg-gradient-to-b from-canvas/35 via-transparent to-canvas/45" />
+      </div>
+
+      <div className="relative z-10 w-full max-w-md">
+        {/* Brand — sits directly on the photo, so a soft light halo keeps the
+            dark ink legible over bright OR busy regions of the image.
+            text-shadow inherits, so both lines are covered. */}
+        <div className="mb-6 flex flex-col items-center gap-4 text-center [text-shadow:0_1px_6px_rgb(255_255_255/0.95),0_0_2px_rgb(255_255_255/0.9)]">
           <div>
             <h1 className="text-2xl font-semibold text-ink">
               {t("common.appName")}
@@ -31,7 +59,11 @@ export default function LoginPage() {
           </div>
         </div>
 
-        <div className="rounded-lg border border-line bg-surface p-6 shadow-sm sm:p-8">
+        {/* bg-surface/95 (= white/95) + backdrop-blur-md: the blur neutralizes
+            the photo detail behind the remaining 5%, so the card reads as solid
+            and every field/label holds full AA contrast. shadow-2xl lifts it
+            clearly off the now much more vivid backdrop. */}
+        <div className="rounded-lg border border-line bg-surface/95 p-6 shadow-2xl ring-1 ring-line/50 backdrop-blur-md sm:p-8">
           <h2 className="text-lg font-semibold text-ink">{t("login.title")}</h2>
           <p className="mt-1 text-sm text-muted">{t("login.subtitle")}</p>
 
