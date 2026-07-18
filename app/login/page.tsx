@@ -50,7 +50,20 @@ export default function LoginPage() {
         {/* Brand — sits directly on the photo, so a soft light halo keeps the
             dark ink legible over bright OR busy regions of the image.
             text-shadow inherits, so both lines are covered. */}
-        <div className="mb-6 flex flex-col items-center gap-4 text-center [text-shadow:0_1px_6px_rgb(255_255_255/0.95),0_0_2px_rgb(255_255_255/0.9)]">
+        <div className="mb-6 flex flex-col items-center justify-center text-center [text-shadow:0_1px_6px_rgb(255_255_255/0.95),0_0_2px_rgb(255_255_255/0.9)]">
+          {/* Logo is 200x104 (~1.9:1), so height-driven sizing with w-auto keeps
+              the aspect ratio intact — a square h-20 w-20 would squash it.
+              Intrinsic width/height are passed so no layout shift occurs.
+              The drop-shadow halo mirrors the text-shadow on the headings, so
+              the mark stays legible over the vivid campus backdrop. */}
+          <Image
+            src="/logo.png"
+            alt={t("common.collegeName")}
+            width={200}
+            height={104}
+            priority
+            className="mb-4 h-14 w-auto drop-shadow-[0_1px_6px_rgb(255_255_255/0.95)] sm:h-16"
+          />
           <div>
             <h1 className="text-2xl font-semibold text-ink">
               {t("common.appName")}
