@@ -1,29 +1,47 @@
 "use client";
 
-// Bulk student import — drag-and-drop CSV, then a column-mapping step, then a
-// validated preview before anything is written.
+// Bulk student import — drag-and-drop .csv / .xlsx, a column-mapping step, then
+// a validated preview before anything is written.
+//
+// PARSING IS SERVER-SIDE (Phase 4). This component never parses the file; it
+// uploads it and renders what the server says it contains. The previous version
+// parsed with papaparse in the browser and posted an array of rows, which meant
+// every limit — size, real file type, row cap, cell cap, formula neutralization
+// — lived in code the caller controlled.
 //
 // Flow:
-//   1. Drop / pick a .csv -> papaparse (header mode) gives headers + rows.
-//   2. Map each portal field to a CSV header (auto-guessed, admin can adjust).
-//   3. Live validation flags malformed emails / missing mandatory fields.
-//   4. Only the valid rows are sent to bulkImportStudentsAction.
+//   1. Drop / pick a file -> POST it to parseImportFileAction, which enforces
+//      the size / type / row / cell limits and returns sanitized headers+rows.
+//   2. Map each portal field to a column (auto-guessed, admin can adjust).
+//   3. Live validation flags malformed emails / missing mandatory fields. This
+//      is PREVIEW ONLY — the server re-checks every row on import.
+//   4. The same File plus the mapping go to importStudentsFileAction, which
+//      RE-PARSES server-side and writes. The previewed rows are never trusted
+//      for the write, because they made a round trip through this browser.
 
 import { useMemo, useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { FileUp, X } from "lucide-react";
-import Papa from "papaparse";
 import { useT } from "@/components/i18n/LanguageProvider";
 import { Editable } from "@/components/edit-mode/Editable";
 import {
-  bulkImportStudentsAction,
-  type ActionError,
-  type CsvStudentRow,
-} from "@/app/actions/onboarding";
+  importStudentsFileAction,
+  parseImportFileAction,
+  type ImportError,
+  type TargetField,
+} from "@/app/actions/import";
 import { extractYear, normalizeCourse, resolveCourse } from "@/lib/courses";
 import type { ToastKind } from "./UsersContent";
 
-type TargetField = keyof CsvStudentRow;
+/** Row shape after the operator's column mapping is applied (preview only). */
+type MappedRow = Partial<Record<TargetField, string>>;
+
+/** Preview-only validation codes; the server owns the authoritative ones. */
+type PreviewIssue =
+  | "missingName"
+  | "missingRollNo"
+  | "invalidEmail"
+  | "invalidCourse";
 
 // Portal fields in display order. `required` drives mandatory-field validation;
 // `guesses` are substrings used to auto-match a CSV header to this field.
@@ -76,23 +94,31 @@ export function CsvImport({
   const [pending, startTransition] = useTransition();
   const inputRef = useRef<HTMLInputElement>(null);
 
+  // The File itself is kept so the import step can re-upload it for the
+  // authoritative server-side parse — the operator never picks it twice.
+  const [file, setFile] = useState<File | null>(null);
   const [fileName, setFileName] = useState<string | null>(null);
   const [headers, setHeaders] = useState<string[]>([]);
   const [rows, setRows] = useState<RawRow[]>([]);
   const [mapping, setMapping] = useState<Mapping>({});
   const [dragging, setDragging] = useState(false);
 
+  // Upload for parsing. The server decides whether the file is acceptable and
+  // what it contains; this component only renders the answer.
   const parseFile = (file: File) => {
-    Papa.parse<RawRow>(file, {
-      header: true,
-      skipEmptyLines: true,
-      complete: (res) => {
-        const fields = res.meta.fields ?? [];
-        setHeaders(fields);
-        setRows(res.data);
-        setMapping(guessMapping(fields));
-        setFileName(file.name);
-      },
+    startTransition(async () => {
+      const body = new FormData();
+      body.append("file", file);
+      const res = await parseImportFileAction(body);
+      if (!res.ok) {
+        notify("error", importErrorMessage(res.error, res.retryAfter));
+        return;
+      }
+      setFile(file);
+      setFileName(file.name);
+      setHeaders(res.headers);
+      setRows(res.rows);
+      setMapping(guessMapping(res.headers));
     });
   };
 
@@ -101,8 +127,18 @@ export function CsvImport({
     if (file) parseFile(file);
   };
 
+  /** Translate a server rejection into a message. Keys live under onboarding.csv.errors. */
+  function importErrorMessage(error: ImportError, retryAfter?: number): string {
+    if (error === "rateLimited") {
+      return t("onboarding.csv.errors.rateLimited", {
+        minutes: Math.max(1, Math.ceil((retryAfter ?? 60) / 60)),
+      });
+    }
+    return t(`onboarding.csv.errors.${error}`);
+  }
+
   // Map each raw row to our schema shape using the current column mapping.
-  const mapped: CsvStudentRow[] = useMemo(() => {
+  const mapped: MappedRow[] = useMemo(() => {
     return rows.map((r) => {
       const get = (k: TargetField) => {
         const h = mapping[k];
@@ -122,7 +158,7 @@ export function CsvImport({
 
   // Per-row client validation -> error code (or null = ready). Mirrors the
   // authoritative server checks so the preview never disagrees with the import.
-  const validations: (ActionError | null)[] = useMemo(() => {
+  const validations: (PreviewIssue | null)[] = useMemo(() => {
     return mapped.map((row) => {
       if (!row.fullName) return "missingName";
       if (!row.studentId) return "missingRollNo";
@@ -162,6 +198,7 @@ export function CsvImport({
   const invalidCount = rows.length - validRows.length;
 
   const reset = () => {
+    setFile(null);
     setFileName(null);
     setHeaders([]);
     setRows([]);
@@ -170,11 +207,16 @@ export function CsvImport({
   };
 
   const doImport = () => {
-    if (validRows.length === 0) return;
+    if (!file || validRows.length === 0) return;
     startTransition(async () => {
-      const result = await bulkImportStudentsAction(validRows);
+      // Send the FILE and the mapping. The server re-parses from scratch — the
+      // previewed rows above are not the data that gets written.
+      const body = new FormData();
+      body.append("file", file);
+      body.append("mapping", JSON.stringify(mapping));
+      const result = await importStudentsFileAction(body);
       if (!result.ok) {
-        notify("error", t("onboarding.toast.importFailed"));
+        notify("error", importErrorMessage(result.error, result.retryAfter));
         return;
       }
       if (result.failed.length > 0) {
@@ -197,7 +239,7 @@ export function CsvImport({
   };
 
   return (
-    <div className="fixed inset-0 z-40 flex items-start justify-center overflow-y-auto p-4">
+    <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto p-4">
       <button
         type="button"
         aria-label={t("common.cancel")}
@@ -250,7 +292,7 @@ export function CsvImport({
               <input
                 ref={inputRef}
                 type="file"
-                accept=".csv,text/csv"
+                accept=".csv,.xlsx,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
                 className="hidden"
                 onChange={(e) => onFiles(e.target.files)}
               />

@@ -5,13 +5,14 @@
 import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { LifeBuoy, Send } from "lucide-react";
-import { useT, useLocale } from "@/components/i18n/LanguageProvider";
+import { useT } from "@/components/i18n/LanguageProvider";
 import { Editable } from "@/components/edit-mode/Editable";
 import {
   createTicketAction,
   type TicketCategory,
   type TicketStatus,
 } from "@/app/actions/support";
+import { formatDisplayDate } from "@/lib/dates";
 
 export type StudentTicket = {
   id: number;
@@ -40,7 +41,6 @@ const STATUS_STYLE: Record<TicketStatus, string> = {
 
 export function StudentSupport({ tickets }: { tickets: StudentTicket[] }) {
   const t = useT();
-  const { locale } = useLocale();
   const router = useRouter();
   const [pending, startTransition] = useTransition();
 
@@ -57,7 +57,7 @@ export function StudentSupport({ tickets }: { tickets: StudentTicket[] }) {
   };
 
   const fmtDate = (ms: number) =>
-    new Date(ms).toLocaleDateString(locale, {
+    formatDisplayDate(ms, {
       day: "numeric",
       month: "short",
       year: "numeric",

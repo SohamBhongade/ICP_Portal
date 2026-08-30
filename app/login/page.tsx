@@ -175,7 +175,14 @@ export default function LoginPage() {
                 aria-live="polite"
                 className="rounded-md bg-lavender px-3 py-2 text-sm text-danger"
               >
-                {t(`login.errors.${state.error}`)}
+                {state.error === "rateLimited"
+                  ? t("login.errors.rateLimited", {
+                      minutes: Math.max(
+                        1,
+                        Math.ceil((state.retryAfter ?? 900) / 60),
+                      ),
+                    })
+                  : t(`login.errors.${state.error}`)}
               </p>
             )}
 

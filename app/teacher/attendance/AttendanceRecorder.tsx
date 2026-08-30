@@ -22,13 +22,9 @@ import {
   type AttendanceStatus,
   type RosterStudent,
 } from "@/app/actions/attendance";
+import { fieldErrorSuffix } from "@/lib/validation/client";
+import { todayIso } from "@/lib/dates";
 
-function todayISO() {
-  // Local-date ISO (YYYY-MM-DD), not UTC, so "today" matches the teacher's day.
-  const d = new Date();
-  const off = d.getTimezoneOffset() * 60000;
-  return new Date(d.getTime() - off).toISOString().slice(0, 10);
-}
 
 export function AttendanceRecorder({
   courseOptions,
@@ -50,7 +46,7 @@ export function AttendanceRecorder({
   const [semester, setSemester] = useState("");
   const [subject, setSubject] = useState("");
   const [batch, setBatch] = useState(""); // "" = Theory (whole class)
-  const [date, setDate] = useState(todayISO);
+  const [date, setDate] = useState(todayIso);
 
   const [roster, setRoster] = useState<RosterStudent[]>([]);
   // One status per student id; missing entries fall back to "present".
@@ -143,7 +139,14 @@ export function AttendanceRecorder({
           msg:
             result.error === "empty"
               ? t("attendance.toast.empty")
-              : t("attendance.toast.failed"),
+              : result.error === "pastDateForbidden"
+                ? t("attendance.toast.pastDateForbidden")
+                : result.error === "futureDate"
+                  ? t("attendance.toast.futureDate")
+                  : result.error === "validation"
+                    ? t("attendance.toast.validation") +
+                      fieldErrorSuffix(result.fieldErrors)
+                    : t("attendance.toast.failed"),
         });
       }
     });
@@ -344,7 +347,7 @@ export function AttendanceRecorder({
       {toast && (
         <div
           role="status"
-          className={`fixed bottom-4 right-4 z-50 max-w-xs rounded-md border px-3 py-2 text-sm shadow-md ${
+          className={`fixed bottom-4 right-4 z-60 max-w-xs rounded-md border px-3 py-2 text-sm shadow-md ${
             toast.kind === "success"
               ? "border-teal/40 bg-mint text-ink"
               : "border-danger/40 bg-lavender text-ink"

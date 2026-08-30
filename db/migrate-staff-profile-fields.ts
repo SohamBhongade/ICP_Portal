@@ -17,14 +17,43 @@ config({ path: ".env.local" });
 
 import { sql } from "drizzle-orm";
 
+// The ONLY place in this codebase that builds SQL by string concatenation.
+//
+// It is unavoidable here: SQLite cannot parameterize an IDENTIFIER, so
+// `ALTER TABLE users ADD COLUMN ?` is not valid SQL — the column name must be
+// interpolated literally. Every other query in the app (app/, lib/, db/) goes
+// through Drizzle's query builder or `sql` template bindings, which parameterize
+// values.
+//
+// What makes this safe, and what keeps it safe:
+//   - The names come from this hardcoded list, never from a request. This is a
+//     one-off CLI migration; it accepts no arguments and no user input at all.
+//   - assertSafeIdentifier() below re-checks each name against a strict pattern
+//     immediately before interpolation, so the invariant is enforced by code
+//     rather than by the fact that the array happens to be a literal today.
 const COLUMNS = ["employee_id", "department", "designation"];
+
+/**
+ * Refuse to interpolate anything that is not a plain snake_case identifier.
+ * A belt-and-braces guard on the one raw-SQL path in the project.
+ */
+function assertSafeIdentifier(name: string): string {
+  if (!/^[a-z][a-z0-9_]{0,62}$/.test(name)) {
+    throw new Error(
+      `Refusing to build SQL with the unsafe identifier ${JSON.stringify(name)}.`,
+    );
+  }
+  return name;
+}
 
 async function main() {
   const { db } = await import("./index");
 
   for (const col of COLUMNS) {
     try {
-      await db.run(sql.raw(`ALTER TABLE users ADD COLUMN ${col} text`));
+      await db.run(
+        sql.raw(`ALTER TABLE users ADD COLUMN ${assertSafeIdentifier(col)} text`),
+      );
       console.log(`  ✓ Added users.${col}`);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);

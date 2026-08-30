@@ -1,40 +1,33 @@
-// Teacher overview (Phase 12) — live metrics.
+// Teacher Overview.
 //
-// "Classes conducted this week" = distinct attendance sessions (date · class ·
-// subject · batch) this teacher recorded within the current ISO week.
+// Phase 7 CLEARED this page. It previously counted distinct attendance sessions
+// this teacher recorded in the current ISO week and rendered them in a
+// "Classes this week" stat tile. That query and the TeacherOverview component
+// were removed; route, shell, sidebar and header are untouched.
 
-import { and, eq, gte, lte } from "drizzle-orm";
-import { db } from "@/db";
-import { attendanceLogs } from "@/db/schema";
 import { requireCapability } from "@/lib/auth";
-import { weekBounds } from "@/lib/dates";
-import { TeacherOverview } from "./TeacherOverview";
+import { OverviewWelcome } from "@/components/dashboard/OverviewWelcome";
+import { getT } from "@/lib/i18n/server";
+import type { Role } from "@/lib/auth/permissions";
+
+const ROLE_LABEL_KEY: Record<Role, string> = {
+  admin: "onboarding.roleAdmin",
+  principal: "onboarding.rolePrincipal",
+  "office admin": "onboarding.roleOfficeAdmin",
+  faculty: "onboarding.roleFaculty",
+  staff: "onboarding.roleStaff",
+  student: "onboarding.roleStudent",
+};
 
 export default async function TeacherDashboardPage() {
-  const teacher = await requireCapability("attendance");
-  const { start, end } = weekBounds();
+  const user = await requireCapability("attendance");
+  const t = await getT();
 
-  const sessions = await db
-    .select({
-      date: attendanceLogs.date,
-      className: attendanceLogs.className,
-      subject: attendanceLogs.subject,
-      practicalBatch: attendanceLogs.practicalBatch,
-    })
-    .from(attendanceLogs)
-    .where(
-      and(
-        eq(attendanceLogs.markedBy, teacher.id),
-        gte(attendanceLogs.date, start),
-        lte(attendanceLogs.date, end),
-      ),
-    );
-
-  const distinct = new Set(
-    sessions.map(
-      (s) => `${s.date}|${s.className}|${s.subject}|${s.practicalBatch}`,
-    ),
+  return (
+    <OverviewWelcome
+      roleLabel={t(ROLE_LABEL_KEY[user.role as Role])}
+      greeting={t("dashboard.welcomeBack", { name: user.fullName })}
+      subtitle={t("dashboard.welcomeSubtitle")}
+    />
   );
-
-  return <TeacherOverview classesThisWeek={distinct.size} />;
 }

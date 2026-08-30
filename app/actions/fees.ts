@@ -2,13 +2,15 @@
 
 // Phase 10 — Fee ledger server actions.
 //
-// ALL entry points require the `fees` capability (admin, principal, office
-// admin), re-verified server-side on every call (never trust the client).
-// Students read their own ledger through the server component at /student/fees;
-// they never reach a mutation here.
+// Authorization is split READ vs WRITE, and re-verified server-side at the top
+// of every call (never trust the client):
 //
-//   - fetchStudentLedgerAction: load one student's ledger + computed balances
-//   - postFeeTransactionAction: append a single charge / payment row
+//   - fetchStudentLedgerAction: READ one student's ledger + computed balances.
+//     Takes a student id from the caller, so it is ownership-checked: the
+//     OWNING student, or a staff role holding `fees`/`attendance`. A student
+//     swapping the id for someone else's gets `forbidden`.
+//   - postFeeTransactionAction: WRITE a charge / payment row, gated by the
+//     `feeWrites` capability — Admin, Principal and Office Admin.
 //
 // Balances are always COMPUTED (charges − payments) on the server — see lib/fees.
 
@@ -16,7 +18,14 @@ import { asc, eq } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import { db } from "@/db";
 import { feeLedgers, users } from "@/db/schema";
-import { currentUserWithCapability } from "@/lib/auth";
+import { currentUserWithCapability, getCurrentUser } from "@/lib/auth";
+import { canReadStudentData, type Role } from "@/lib/auth/permissions";
+import { logServerError } from "@/lib/errors";
+import { parseInput, type FieldErrors } from "@/lib/validation/core";
+import {
+  postTransactionSchema,
+  studentIdSchema,
+} from "@/lib/validation/schemas";
 import {
   computeBalances,
   type FeeBalances,
@@ -24,9 +33,9 @@ import {
   type LedgerType,
 } from "@/lib/fees";
 
-/** Returns the caller if they may handle fees, else null. */
-async function assertFees() {
-  return currentUserWithCapability("fees");
+/** Returns the caller if they may POST fee transactions, else null. */
+async function assertFeeWrites() {
+  return currentUserWithCapability("feeWrites");
 }
 
 export type LedgerStudent = {
@@ -42,9 +51,26 @@ export type LedgerResult =
   | { ok: false; error: "forbidden" | "notFound" };
 
 export async function fetchStudentLedgerAction(
-  studentId: number,
+  rawStudentId: number,
 ): Promise<LedgerResult> {
-  if (!(await assertFees())) return { ok: false, error: "forbidden" };
+  // Validate the id before it is used for anything, including the ownership
+  // comparison — a non-integer would otherwise compare unequal and fall through
+  // to the capability branch.
+  const parsedId = parseInput(studentIdSchema, rawStudentId);
+  if (!parsedId.ok) return { ok: false, error: "notFound" };
+  const studentId = parsedId.data;
+
+  // OWNERSHIP CHECK. `studentId` arrives from the caller and is therefore
+  // untrusted. The comparison is against the SESSION user's id, so the only
+  // ledger a student can ever pull is their own; staff with `fees`/`attendance`
+  // may read any. Runs before a single row is read.
+  const actor = await getCurrentUser();
+  if (
+    !actor ||
+    !canReadStudentData({ id: actor.id, role: actor.role as Role }, studentId)
+  ) {
+    return { ok: false, error: "forbidden" };
+  }
 
   const [student] = await db
     .select({
@@ -101,48 +127,52 @@ export type PostTransactionInput = {
 
 export type PostTransactionResult =
   | { ok: true }
-  | { ok: false; error: "forbidden" | "invalid" };
+  | {
+      ok: false;
+      error: "forbidden" | "invalid" | "validation";
+      fieldErrors?: FieldErrors;
+    };
 
 export async function postFeeTransactionAction(
   input: PostTransactionInput,
 ): Promise<PostTransactionResult> {
-  const actor = await assertFees();
+  // Authorization first (Admin / Principal / Office Admin hold `feeWrites`),
+  // then validation, then any business DB call.
+  const actor = await assertFeeWrites();
   if (!actor) return { ok: false, error: "forbidden" };
 
-  const particulars = input.particulars?.trim();
-  const date = input.date?.trim();
-  const type = input.type;
-  const amount = Number(input.amount);
-
-  if (
-    !particulars ||
-    !date ||
-    (type !== "charge" && type !== "payment") ||
-    !Number.isFinite(amount) ||
-    amount <= 0
-  ) {
-    return { ok: false, error: "invalid" };
+  // Types, lengths, enum membership, a real calendar date, a positive amount
+  // with at most two decimals, and no unknown keys.
+  const parsed = parseInput(postTransactionSchema, input);
+  if (!parsed.ok) {
+    return { ok: false, error: "validation", fieldErrors: parsed.fieldErrors };
   }
+  const { studentId, type, particulars, amount, receiptNo, date } = parsed.data;
 
   // Confirm the target is really a student before writing.
   const [student] = await db
     .select({ id: users.id, role: users.role })
     .from(users)
-    .where(eq(users.id, input.studentId))
+    .where(eq(users.id, studentId))
     .limit(1);
   if (!student || student.role !== "student") {
     return { ok: false, error: "invalid" };
   }
 
-  await db.insert(feeLedgers).values({
-    studentId: input.studentId,
-    particulars,
-    type,
-    amount,
-    receiptNo: input.receiptNo?.trim() || null,
-    date,
-    recordedBy: actor.id,
-  });
+  try {
+    await db.insert(feeLedgers).values({
+      studentId,
+      particulars,
+      type,
+      amount,
+      receiptNo: receiptNo ?? null,
+      date,
+      recordedBy: actor.id,
+    });
+  } catch (err) {
+    logServerError("postFeeTransactionAction", err, { studentId, type });
+    return { ok: false, error: "invalid" };
+  }
 
   revalidatePath("/admin/fees");
   revalidatePath("/student/fees");

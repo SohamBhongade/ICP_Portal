@@ -8,18 +8,31 @@
 //   - client components  (hide/disable UI a role can't use)
 // so the matrix can never drift apart between UI and enforcement.
 //
-// University matrix (Phase 2):
-//   role          settings  manageUsers  approveRequests  deleteUsers  fees  attendance
-//   admin            ✓           ✓              ✓              ✓         ✓        ✓
-//   principal        ✓           ✓              ✓              ✗         ✓        ✓
-//   office admin     ✗           ✓              ✗              ✗         ✓        ✗
-//   faculty          ✗           ✗              ✗              ✗         ✗        ✓
-//   staff            ✗           ✗              ✗              ✗         ✗        ✓
-//   student          — (no staff-console access)
+// University matrix (Phase 2 hardening — see ENFORCEMENT MATRIX below):
+//   role          settings  createUsers  manageUsers  approveRequests  deleteUsers  feeWrites  fees  attendance  attendanceBackdate
+//   admin            ✓           ✓            ✓              ✓              ✓          ✓        ✓        ✓            ✓
+//   principal        ✗           ✗            ✗              ✗              ✗          ✓        ✓        ✓            ✗
+//   office admin     ✗           ✗            ✗              ✗              ✗          ✓        ✓        ✗            ✗
+//   faculty          ✗           ✗            ✗              ✗              ✗          ✗        ✗        ✓            ✗
+//   staff            ✗           ✗            ✗              ✗              ✗          ✗        ✗        ✓            ✗
+//   student          — (no staff-console access; reads only their OWN records)
 //
-// NOTE: manageUsers (add/edit users) and approveRequests (accept/reject pending
-// self-service signups) are DISTINCT. Office Admin can manage the user roster but
-// must NOT approve account requests — that stays with Admin + Principal only.
+// ENFORCEMENT MATRIX (the Phase 2 requirement this table encodes):
+//   Fee writes                -> admin, principal, office admin   (feeWrites)
+//   User create/edit/delete   -> admin only            (createUsers/manageUsers/deleteUsers)
+//   Account approve/reject    -> admin only            (approveRequests)
+//   Dropdown/settings edits   -> admin only            (settings)
+//   Edit Mode toggle          -> admin only            (settings)
+//   Attendance marking        -> teacher or admin      (attendance)
+//   Attendance edits of past  -> admin only            (attendanceBackdate)
+//   Student data reads        -> owning student, or teacher/admin
+//                                (canReadStudentData below)
+//
+// NOTE on the read/write split: `fees` grants access to the fee console, while
+// `feeWrites` gates posting a transaction. They currently cover the same three
+// roles, but staying separate means a view-only role can be added later without
+// touching a single call site. Same idea for attendance: `attendance` marks
+// TODAY, `attendanceBackdate` is what lets anyone touch a past date.
 
 export type Role =
   | "admin"
@@ -31,17 +44,33 @@ export type Role =
 
 // The atomic permissions the matrix is expressed in.
 export type Capability =
-  | "settings" // view Settings + Edit Mode (dropdowns / text overrides)
-  | "manageUsers" // add + edit users in the Users console
+  | "settings" // edit Settings, dropdowns, text overrides + Edit Mode toggle
+  | "createUsers" // mint a NEW account directly (manual add / CSV)
+  | "manageUsers" // edit existing users in the Users console
   | "approveRequests" // accept/reject pending self-service account requests
-  | "deleteUsers" // permanently delete a user (admin only)
-  | "fees" // view + post fee-ledger transactions
-  | "attendance"; // record attendance
+  | "deleteUsers" // permanently delete a user
+  | "fees" // VIEW the fee console / read any student's ledger
+  | "feeWrites" // POST a fee-ledger transaction (charge / payment)
+  | "attendance" // record attendance for the current day
+  | "attendanceBackdate"; // mark or amend attendance for a PAST date
 
 const ROLE_CAPABILITIES: Record<Role, readonly Capability[]> = {
-  admin: ["settings", "manageUsers", "approveRequests", "deleteUsers", "fees", "attendance"],
-  principal: ["settings", "manageUsers", "approveRequests", "fees", "attendance"],
-  "office admin": ["manageUsers", "fees"],
+  admin: [
+    "settings",
+    "createUsers",
+    "manageUsers",
+    "approveRequests",
+    "deleteUsers",
+    "fees",
+    "feeWrites",
+    "attendance",
+    "attendanceBackdate",
+  ],
+  // Fee posting is shared: Admin, Principal and Office Admin may all write to a
+  // ledger. User management is admin-exclusive; attendance is Admin, Principal,
+  // Faculty and Staff.
+  principal: ["fees", "feeWrites", "attendance"],
+  "office admin": ["fees", "feeWrites"],
   faculty: ["attendance"],
   staff: ["attendance"],
   student: [],
@@ -98,6 +127,26 @@ export function isStaffRole(role: Role): boolean {
   return role !== "student";
 }
 
+/**
+ * Ownership gate for any READ that accepts a student id from the URL or a
+ * request payload (attendance, fees, tickets).
+ *
+ * Allowed when the caller IS that student, or when they hold a staff capability
+ * over student records (`fees` for ledgers, `attendance` for rosters/logs).
+ * Everyone else is denied — so a student swapping the id in a payload can only
+ * ever address their own row.
+ *
+ * Pure and Edge-safe like the rest of this file: the caller passes the id and
+ * role it already verified from the SESSION, never from the request.
+ */
+export function canReadStudentData(
+  actor: { id: number; role: Role },
+  targetStudentId: number,
+): boolean {
+  if (actor.id === targetStudentId) return true;
+  return canAny(actor.role, "fees", "attendance");
+}
+
 // ---- Route model (shared by proxy + page guards) ----
 
 // Longest-prefix-wins map of staff-console sub-routes to the capability each
@@ -106,9 +155,9 @@ const ADMIN_ROUTE_CAPS: { prefix: string; capability: Capability }[] = [
   { prefix: "/admin/settings", capability: "settings" },
   { prefix: "/admin/support", capability: "settings" },
   { prefix: "/admin/attendance", capability: "settings" }, // read-only monitoring (management view)
+  { prefix: "/admin/fees", capability: "fees" },
   { prefix: "/admin/requests", capability: "approveRequests" },
   { prefix: "/admin/users", capability: "manageUsers" },
-  { prefix: "/admin/fees", capability: "fees" },
 ];
 
 /**
@@ -118,6 +167,7 @@ const ADMIN_ROUTE_CAPS: { prefix: string; capability: Capability }[] = [
 export function landingPath(role: Role): string {
   if (role === "student") return "/student";
   if (canAny(role, "manageUsers", "fees", "settings")) return "/admin";
+  // (attendance-only roles fall through to the recorder console below)
   if (can(role, "attendance")) return "/teacher/attendance";
   return "/login";
 }

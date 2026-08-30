@@ -58,6 +58,9 @@ export default async function UsersPage() {
       batchOptions={toItems(batchOpts)}
       canDelete={can(me.role as Role, "deleteUsers")}
       canEditStudents={can(me.role as Role, "manageUsers")}
+      // Direct account creation (drawer + CSV) is admin-only. This merely hides
+      // the buttons; createUserAction / bulkImportStudentsAction re-check it.
+      canCreateUsers={can(me.role as Role, "createUsers")}
       currentUserId={me.id}
       assignableRoles={assignableRoles(me.role as Role)}
       savedLayout={savedLayout}

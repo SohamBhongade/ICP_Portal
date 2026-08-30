@@ -5,21 +5,28 @@
 // dashboard shell. Course/Class/Batch are plain <select>s (no Edit Mode context
 // out here). On success we swap the form for a confirmation panel — the student
 // can't sign in until an admin approves, so there's nowhere to redirect them.
+//
+// NO PASSWORD IS COLLECTED HERE. A request is stored with a NULL password_hash;
+// the approving admin assigns the credential and passes it to the applicant, so
+// a public form can never create anything that is able to authenticate.
 
 import { useState, useTransition } from "react";
 import Link from "next/link";
-import { CheckCircle2, Eye, EyeOff } from "lucide-react";
+import { CheckCircle2 } from "lucide-react";
 import { useT } from "@/components/i18n/LanguageProvider";
 import {
   requestAccountAction,
   type RequestAccountError,
 } from "@/app/actions/auth";
 import type { Role } from "@/lib/auth/permissions";
+import {
+  fieldErrorSuffix,
+  type FieldErrors,
+} from "@/lib/validation/client";
 
 type Item = { value: string; label: string };
-// Server error codes + a client-only "passwords don't match" check. All map to
-// requestAccount.errors.<code> translation keys.
-type FormError = RequestAccountError | "passwordMismatch";
+// Server error codes map straight to requestAccount.errors.<code> keys.
+type FormError = RequestAccountError;
 
 // Roles the public may apply for — every role EXCEPT admin. Order matters (shown
 // as-is in the dropdown). The server re-checks this list; the client just mirrors it.
@@ -46,8 +53,11 @@ export function RequestAccountForm({
   const t = useT();
   const [pending, startTransition] = useTransition();
   const [error, setError] = useState<FormError | null>(null);
+  // Field-level detail from the server schema, appended to the error line.
+  const [fieldErrors, setFieldErrors] = useState<FieldErrors | undefined>();
+  // Seconds to wait, set only when the server reports a rate-limit hit.
+  const [retryAfter, setRetryAfter] = useState<number | undefined>();
   const [done, setDone] = useState(false);
-  const [showPassword, setShowPassword] = useState(false);
 
   const [role, setRole] = useState<Role>("student");
   const [fullName, setFullName] = useState("");
@@ -60,23 +70,12 @@ export function RequestAccountForm({
   const [employeeId, setEmployeeId] = useState("");
   const [department, setDepartment] = useState("");
   const [designation, setDesignation] = useState("");
-  const [password, setPassword] = useState("");
-  const [confirm, setConfirm] = useState("");
 
   const isStudent = role === "student";
 
   const submit = (e: React.FormEvent) => {
     e.preventDefault();
     setError(null);
-
-    if (password.length < 6) {
-      setError("weakPassword");
-      return;
-    }
-    if (password !== confirm) {
-      setError("passwordMismatch");
-      return;
-    }
 
     startTransition(async () => {
       const result = await requestAccountAction({
@@ -91,10 +90,13 @@ export function RequestAccountForm({
         employeeId,
         department,
         designation,
-        password,
       });
       if (result.ok) setDone(true);
-      else setError(result.error);
+      else {
+        setError(result.error);
+        setFieldErrors(result.fieldErrors);
+        setRetryAfter(result.retryAfter);
+      }
     });
   };
 
@@ -294,56 +296,11 @@ export function RequestAccountForm({
                   </div>
                 )}
 
-                <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-                  <Field
-                    label={t("requestAccount.password")}
-                    htmlFor="ra-password"
-                  >
-                    <div className="relative">
-                      <input
-                        id="ra-password"
-                        type={showPassword ? "text" : "password"}
-                        value={password}
-                        onChange={(e) => setPassword(e.target.value)}
-                        placeholder={t("requestAccount.passwordPlaceholder")}
-                        required
-                        autoComplete="new-password"
-                        className={`${inputClass} pr-10`}
-                      />
-                      <button
-                        type="button"
-                        onClick={() => setShowPassword((s) => !s)}
-                        aria-label={
-                          showPassword
-                            ? t("login.hidePassword")
-                            : t("login.showPassword")
-                        }
-                        className="absolute inset-y-0 right-0 flex items-center px-3 text-muted hover:text-ink"
-                      >
-                        {showPassword ? (
-                          <EyeOff className="size-4" />
-                        ) : (
-                          <Eye className="size-4" />
-                        )}
-                      </button>
-                    </div>
-                  </Field>
-                  <Field
-                    label={t("requestAccount.confirmPassword")}
-                    htmlFor="ra-confirm"
-                  >
-                    <input
-                      id="ra-confirm"
-                      type={showPassword ? "text" : "password"}
-                      value={confirm}
-                      onChange={(e) => setConfirm(e.target.value)}
-                      placeholder={t("requestAccount.confirmPasswordPlaceholder")}
-                      required
-                      autoComplete="new-password"
-                      className={inputClass}
-                    />
-                  </Field>
-                </div>
+                {/* No password fields: the approving admin assigns the
+                    credential. See the file header. */}
+                <p className="rounded-md border border-line bg-canvas px-3 py-2 text-xs text-muted">
+                  {t("requestAccount.credentialNote")}
+                </p>
 
                 {error && (
                   <p
@@ -351,7 +308,15 @@ export function RequestAccountForm({
                     aria-live="polite"
                     className="rounded-md border border-danger/40 bg-lavender px-3 py-2 text-sm text-danger"
                   >
-                    {t(`requestAccount.errors.${error}`)}
+                    {error === "rateLimited"
+                      ? t("requestAccount.errors.rateLimited", {
+                          minutes: Math.max(
+                            1,
+                            Math.ceil((retryAfter ?? 3600) / 60),
+                          ),
+                        })
+                      : t(`requestAccount.errors.${error}`)}
+                    {fieldErrorSuffix(fieldErrors)}
                   </p>
                 )}
 

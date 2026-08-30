@@ -171,6 +171,26 @@ export const textOverrides = sqliteTable("text_overrides", {
   value: text("value").notNull(),
 });
 
+// ---------- Rate limiting (durable, shared across serverless invocations) ----------
+//
+// Vercel serverless gives every invocation its own memory, so an in-process
+// counter is not a limit — it is N limits, one per warm lambda, and an attacker
+// gets N x the allowance for free. This table is the durable backing store.
+//
+// One row per (rule, subject) key, e.g. "login:ip:203.0.113.4" or
+// "login:id:stu001". Counting is a FIXED WINDOW: `windowStart` marks when the
+// current window opened and `count` is incremented atomically by a single
+// UPSERT (see lib/rate-limit/store.ts), which is safe under concurrency.
+// `expiresAt` exists so stale rows can be pruned cheaply.
+export const rateLimits = sqliteTable("rate_limits", {
+  key: text("key").primaryKey(),
+  count: integer("count").notNull().default(0),
+  // Epoch SECONDS (not a Date): the increment happens inside one SQL statement,
+  // so the value has to be comparable in SQL without a driver-side conversion.
+  windowStart: integer("window_start").notNull(),
+  expiresAt: integer("expires_at").notNull(),
+});
+
 // ---------- Inferred types ----------
 export type User = typeof users.$inferSelect;
 export type NewUser = typeof users.$inferInsert;
@@ -178,3 +198,4 @@ export type AttendanceLog = typeof attendanceLogs.$inferSelect;
 export type FeeLedger = typeof feeLedgers.$inferSelect;
 export type SupportTicket = typeof supportTickets.$inferSelect;
 export type DropdownOption = typeof dropdownOptions.$inferSelect;
+export type RateLimit = typeof rateLimits.$inferSelect;

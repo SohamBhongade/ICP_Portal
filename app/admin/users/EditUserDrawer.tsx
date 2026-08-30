@@ -20,6 +20,10 @@ import {
 } from "@/components/edit-mode/EditableDropdown";
 import { updateUserAction, type ActionError } from "@/app/actions/onboarding";
 import type { Role } from "@/lib/auth/permissions";
+import {
+  fieldErrorSuffix,
+  type FieldErrors,
+} from "@/lib/validation/client";
 import type { ToastKind, UserRow } from "./UsersContent";
 
 // Translation keys per role (mirrors ROLE_LABEL in UsersContent).
@@ -90,6 +94,8 @@ export function EditUserDrawer({
   const router = useRouter();
   const [pending, startTransition] = useTransition();
   const [error, setError] = useState<ActionError | "notFound" | null>(null);
+  // Field-level detail from the server schema, appended to the error line.
+  const [fieldErrors, setFieldErrors] = useState<FieldErrors | undefined>();
 
   const isStudent = user.role === "student";
 
@@ -126,21 +132,29 @@ export function EditUserDrawer({
         status,
       });
       if (result.ok) {
+        // Activating an account that had no credential yet mints a temporary
+        // password — show it once so the admin can pass it to the user.
         notify(
           "success",
-          t("onboarding.toast.updated", { name: fullName.trim() }),
+          result.assignedPassword
+            ? t("onboarding.toast.updatedWithPassword", {
+                name: fullName.trim(),
+                password: result.assignedPassword,
+              })
+            : t("onboarding.toast.updated", { name: fullName.trim() }),
         );
         router.refresh();
         onClose();
       } else {
         setError(result.error);
+        setFieldErrors(result.fieldErrors);
         notify("error", t("onboarding.toast.updateFailed"));
       }
     });
   };
 
   return (
-    <div className="fixed inset-0 z-40 flex justify-end">
+    <div className="fixed inset-0 z-50 flex justify-end">
       <button
         type="button"
         aria-label={t("onboarding.create.cancel")}
@@ -285,6 +299,7 @@ export function EditUserDrawer({
           {error && (
             <p className="rounded-md border border-danger/40 bg-lavender px-3 py-2 text-sm text-danger">
               {t(`onboarding.errors.${error}`)}
+              {fieldErrorSuffix(fieldErrors)}
             </p>
           )}
 

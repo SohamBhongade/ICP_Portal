@@ -8,8 +8,24 @@
 // drawer toggled from the topbar (with a dismiss scrim). Active route is
 // highlighted via usePathname. Motion is short and disabled under
 // prefers-reduced-motion (see globals.css).
+//
+// Z-INDEX SCALE (the whole app; keep these in step)
+//   20  sticky page header
+//   30  mobile drawer scrim
+//   40  sidebar / drawer
+//   50  modal dialogs and slide-over panels
+//   60  toasts (must clear a modal, since a modal can raise one)
+//  100  post-login splash (components/splash)
+// Two layers previously shared 40, which only worked because the modal happened
+// to sit later in the DOM. Anything that reordered them would have let the
+// sidebar punch through a modal overlay.
+//
+// MOBILE DRAWER ACCESSIBILITY: a closed drawer hidden only with a transform is
+// still in the tab order and still announced by screen readers. The fix is
+// `visibility: hidden` (Tailwind `invisible`), applied below — see the note on
+// the <aside>.
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import Image from "next/image";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
@@ -43,8 +59,51 @@ export function AppShell({
   const [drawerOpen, setDrawerOpen] = useState(false);
   const pathname = usePathname();
 
+  // Where focus came from, so it can be handed back when the drawer closes.
+  const openerRef = useRef<HTMLButtonElement | null>(null);
+  const drawerRef = useRef<HTMLElement | null>(null);
+
   const isActive = (href: string) =>
     pathname === href || pathname.startsWith(href + "/");
+
+  // Escape closes the drawer. Without this a keyboard user can open the menu
+  // and then has no way out except tabbing to the X.
+  useEffect(() => {
+    if (!drawerOpen) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setDrawerOpen(false);
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [drawerOpen]);
+
+  // Lock the page behind the open drawer. Without it, dragging on the scrim
+  // scrolls the content underneath, which reads as the drawer being broken.
+  useEffect(() => {
+    if (!drawerOpen) return;
+    const previous = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => {
+      document.body.style.overflow = previous;
+    };
+  }, [drawerOpen]);
+
+  // Move focus into the drawer on open, and return it to the hamburger on
+  // close, so keyboard focus is never stranded on a now-hidden element.
+  //
+  // `wasOpen` guards the close branch: without it this effect also fires on
+  // MOUNT (drawerOpen starts false) and would yank focus to the hamburger on
+  // every single page load.
+  const wasOpen = useRef(false);
+  useEffect(() => {
+    if (drawerOpen) {
+      drawerRef.current?.querySelector<HTMLElement>("a, button")?.focus();
+    } else if (wasOpen.current) {
+      openerRef.current?.focus({ preventScroll: true });
+    }
+    wasOpen.current = drawerOpen;
+  }, [drawerOpen]);
+
 
   return (
     <div className="min-h-dvh">
@@ -60,8 +119,27 @@ export function AppShell({
 
       {/* Sidebar */}
       <aside
-        className={`fixed inset-y-0 left-0 z-40 flex w-64 flex-col bg-primary text-primary-foreground transition-transform duration-200 md:translate-x-0 ${
-          drawerOpen ? "translate-x-0" : "-translate-x-full"
+        ref={drawerRef}
+        id="app-sidebar"
+        aria-label={BRAND}
+        // ACCESSIBILITY: `-translate-x-full` alone only moves the drawer out of
+        // SIGHT. It stays in the tab order and in the accessibility tree, so on
+        // a phone Tab walks through eight invisible links and a screen reader
+        // announces a menu that is not on screen.
+        //
+        // `invisible` (visibility: hidden) is what actually removes it from
+        // both, and unlike `inert` it needs no JavaScript — so the drawer is
+        // correct on the very first paint, before hydration, and there is no
+        // viewport guess for the server to get wrong.
+        //
+        // `md:visible` re-exposes it at >=768px, where it is a permanent
+        // sidebar rather than a drawer.
+        //
+        // visibility is included in the transition so it flips at the END of
+        // the slide-out (CSS transitions treat it discretely) — without that,
+        // the drawer would blink out of existence instead of sliding away.
+        className={`fixed inset-y-0 left-0 z-40 flex w-64 flex-col bg-primary text-primary-foreground transition-[transform,visibility] duration-200 md:visible md:translate-x-0 ${
+          drawerOpen ? "visible translate-x-0" : "invisible -translate-x-full"
         }`}
       >
         <div className="flex items-center justify-between gap-2 px-5 py-5">
@@ -123,10 +201,13 @@ export function AppShell({
       <div className="md:pl-64">
         <header className="sticky top-0 z-20 flex h-16 items-center gap-3 border-b border-line bg-surface/90 px-4 backdrop-blur sm:px-6">
           <button
+            ref={openerRef}
             type="button"
             aria-label="Open menu"
+            aria-expanded={drawerOpen}
+            aria-controls="app-sidebar"
             onClick={() => setDrawerOpen(true)}
-            className="rounded-md p-2 text-ink hover:bg-lavender md:hidden"
+            className="cursor-pointer rounded-md p-2 text-ink hover:bg-lavender md:hidden"
           >
             <Menu className="size-5" />
           </button>

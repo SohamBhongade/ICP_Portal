@@ -36,6 +36,7 @@ import {
 } from "@/lib/table-layout";
 import { CreateUserDrawer } from "./CreateUserDrawer";
 import { CsvImport } from "./CsvImport";
+import { formatDisplayDate } from "@/lib/dates";
 
 export type UserRow = {
   id: number;
@@ -85,6 +86,7 @@ export function UsersContent({
   batchOptions,
   canDelete,
   canEditStudents,
+  canCreateUsers,
   currentUserId,
   assignableRoles,
   savedLayout,
@@ -97,6 +99,10 @@ export function UsersContent({
   canDelete: boolean;
   // manageUsers holders (admin / principal / office admin) may edit a user.
   canEditStudents: boolean;
+  // Only Admins may create accounts outright — the "Add user" and "Import CSV"
+  // buttons are hidden otherwise. Presentation only: the server actions behind
+  // them enforce the same rule and reject anyone else regardless.
+  canCreateUsers: boolean;
   // The signed-in user's id — used to lock status editing on your own account.
   currentUserId: number;
   // Roles the current actor is allowed to create (anti-escalation).
@@ -154,7 +160,9 @@ export function UsersContent({
           "error",
           result.error === "self"
             ? t("onboarding.toast.cannotDeleteSelf")
-            : t("onboarding.toast.deleteFailed"),
+            : result.error === "rateLimited"
+              ? t("onboarding.errors.rateLimited")
+              : t("onboarding.toast.deleteFailed"),
         );
       }
       setDeleteTarget(null);
@@ -215,20 +223,24 @@ export function UsersContent({
           >
             <SlidersHorizontal className="size-4" /> {t("onboarding.editColumns")}
           </button>
-          <button
-            type="button"
-            onClick={() => setCsvOpen(true)}
-            className="inline-flex cursor-pointer items-center gap-2 rounded-md border border-line bg-surface px-3 py-2 text-sm font-medium text-ink hover:bg-lavender"
-          >
-            <Upload className="size-4" /> {t("onboarding.importCsv")}
-          </button>
-          <button
-            type="button"
-            onClick={() => setDrawerOpen(true)}
-            className="inline-flex cursor-pointer items-center gap-2 rounded-md bg-primary px-3 py-2 text-sm font-medium text-primary-foreground hover:bg-primary-hover"
-          >
-            <Plus className="size-4" /> {t("onboarding.addUser")}
-          </button>
+          {canCreateUsers && (
+            <>
+              <button
+                type="button"
+                onClick={() => setCsvOpen(true)}
+                className="inline-flex cursor-pointer items-center gap-2 rounded-md border border-line bg-surface px-3 py-2 text-sm font-medium text-ink hover:bg-lavender"
+              >
+                <Upload className="size-4" /> {t("onboarding.importCsv")}
+              </button>
+              <button
+                type="button"
+                onClick={() => setDrawerOpen(true)}
+                className="inline-flex cursor-pointer items-center gap-2 rounded-md bg-primary px-3 py-2 text-sm font-medium text-primary-foreground hover:bg-primary-hover"
+              >
+                <Plus className="size-4" /> {t("onboarding.addUser")}
+              </button>
+            </>
+          )}
         </div>
       </div>
 
@@ -380,7 +392,7 @@ export function UsersContent({
         </section>
       </div>
 
-      {drawerOpen && (
+      {drawerOpen && canCreateUsers && (
         <CreateUserDrawer
           courseOptions={courseOptions}
           classOptions={classOptions}
@@ -391,7 +403,7 @@ export function UsersContent({
         />
       )}
 
-      {csvOpen && (
+      {csvOpen && canCreateUsers && (
         <CsvImport onClose={() => setCsvOpen(false)} notify={notify} />
       )}
 
@@ -434,13 +446,18 @@ function Th({ children }: { children: React.ReactNode }) {
   return <th className="whitespace-nowrap px-4 py-3 font-medium">{children}</th>;
 }
 
-/** Format a joined date defensively — the value crosses the RSC boundary and
- *  may arrive as a Date, an ISO string, or an epoch number. */
+/**
+ * Format a joined date defensively — the value crosses the RSC boundary and may
+ * arrive as a Date, an ISO string, or an epoch number.
+ *
+ * Uses formatDisplayDate, which pins BOTH locale and time zone. The previous
+ * `toLocaleDateString(undefined, ...)` fell back to the host default, so the
+ * server (en-US, UTC) and the browser (the visitor's locale and zone) produced
+ * different strings for the same date — a hydration mismatch on every
+ * non-en-US visitor, with the column visibly changing after load.
+ */
 function formatJoined(value: Date | string | number | null): string {
-  if (value == null) return "—";
-  const date = value instanceof Date ? value : new Date(value);
-  if (Number.isNaN(date.getTime())) return "—";
-  return date.toLocaleDateString(undefined, {
+  return formatDisplayDate(value, {
     year: "numeric",
     month: "short",
     day: "numeric",
@@ -736,7 +753,7 @@ function ToastStack({
   onDismiss: (id: number) => void;
 }) {
   return (
-    <div className="pointer-events-none fixed bottom-4 right-4 z-50 flex w-full max-w-xs flex-col gap-2">
+    <div className="pointer-events-none fixed bottom-4 right-4 z-60 flex w-full max-w-xs flex-col gap-2">
       {toasts.map((toast) => (
         <ToastItem key={toast.id} toast={toast} onDismiss={onDismiss} />
       ))}

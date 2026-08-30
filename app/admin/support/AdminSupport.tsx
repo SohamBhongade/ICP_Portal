@@ -5,13 +5,14 @@
 
 import { useMemo, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
-import { useT, useLocale } from "@/components/i18n/LanguageProvider";
+import { useT } from "@/components/i18n/LanguageProvider";
 import { Editable } from "@/components/edit-mode/Editable";
 import {
   updateTicketStatusAction,
   type TicketCategory,
   type TicketStatus,
 } from "@/app/actions/support";
+import { formatDisplayDate } from "@/lib/dates";
 
 export type AdminTicket = {
   id: number;
@@ -113,7 +114,7 @@ export function AdminSupport({ tickets }: { tickets: AdminTicket[] }) {
       {toast && (
         <div
           role="status"
-          className={`fixed bottom-4 right-4 z-50 max-w-xs rounded-md border px-3 py-2 text-sm shadow-md ${
+          className={`fixed bottom-4 right-4 z-60 max-w-xs rounded-md border px-3 py-2 text-sm shadow-md ${
             toast.kind === "success"
               ? "border-teal/40 bg-mint text-ink"
               : "border-danger/40 bg-lavender text-ink"
@@ -134,7 +135,6 @@ function TicketCard({
   onResult: (kind: "success" | "error", msg: string) => void;
 }) {
   const t = useT();
-  const { locale } = useLocale();
   const router = useRouter();
   const [pending, startTransition] = useTransition();
 
@@ -142,7 +142,7 @@ function TicketCard({
   const [response, setResponse] = useState(ticket.response ?? "");
 
   const fmtDate = (ms: number) =>
-    new Date(ms).toLocaleDateString(locale, {
+    formatDisplayDate(ms, {
       day: "numeric",
       month: "short",
       year: "numeric",

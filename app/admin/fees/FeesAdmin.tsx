@@ -32,6 +32,8 @@ import {
   type LedgerRow,
   type LedgerType,
 } from "@/lib/fees";
+import { fieldErrorSuffix } from "@/lib/validation/client";
+import { todayIso } from "@/lib/dates";
 
 type Student = {
   id: number;
@@ -41,11 +43,6 @@ type Student = {
   className: string | null;
 };
 
-function todayISO() {
-  const d = new Date();
-  const off = d.getTimezoneOffset() * 60000;
-  return new Date(d.getTime() - off).toISOString().slice(0, 10);
-}
 
 export function FeesAdmin({ students }: { students: Student[] }) {
   const t = useT();
@@ -327,7 +324,7 @@ function PostTransactionModal({
   const [amount, setAmount] = useState("");
   const [reference, setReference] = useState("");
   const [remarks, setRemarks] = useState("");
-  const [date, setDate] = useState(todayISO);
+  const [date, setDate] = useState(todayIso);
 
   const opts = type === "charge" ? CHARGE_OPTS : PAYMENT_OPTS;
 
@@ -356,12 +353,21 @@ function PostTransactionModal({
         date,
       });
       if (result.ok) onPosted();
+      // Posting is admin-only (`feeWrites`); Principal / Office Admin can view
+      // this console but not write to a ledger. Say so rather than showing a
+      // generic failure they cannot act on.
+      else if (result.error === "forbidden")
+        onError(t("fees.toast.forbidden"));
+      else if (result.error === "validation")
+        onError(
+          t("fees.toast.validation") + fieldErrorSuffix(result.fieldErrors),
+        );
       else onError(t("fees.toast.failed"));
     });
   };
 
   return (
-    <div className="fixed inset-0 z-40 flex items-center justify-center p-4">
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
       <button
         type="button"
         aria-label={t("fees.modal.cancel")}
@@ -544,7 +550,7 @@ function Toast({
       type="button"
       onClick={onDismiss}
       role="status"
-      className={`fixed bottom-4 right-4 z-50 max-w-xs rounded-md border px-3 py-2 text-left text-sm shadow-md ${
+      className={`fixed bottom-4 right-4 z-60 max-w-xs rounded-md border px-3 py-2 text-left text-sm shadow-md ${
         toast.kind === "success"
           ? "border-teal/40 bg-mint text-ink"
           : "border-danger/40 bg-lavender text-ink"

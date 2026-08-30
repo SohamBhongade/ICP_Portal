@@ -20,13 +20,18 @@ import { revalidatePath } from "next/cache";
 import { db } from "@/db";
 import { users } from "@/db/schema";
 import { currentUserWithCapability } from "@/lib/auth";
+import { logServerError } from "@/lib/errors";
+import { parseInput } from "@/lib/validation/core";
+import { usersTableLayoutSchema } from "@/lib/validation/schemas";
 import {
   sanitizeUsersTableLayout,
   type UiPreferences,
   type UsersTableLayout,
 } from "@/lib/table-layout";
 
-export type SavePreferencesResult = { ok: true } | { ok: false; error: "forbidden" };
+export type SavePreferencesResult =
+  | { ok: true }
+  | { ok: false; error: "forbidden" | "validation" };
 
 /**
  * Persist the current user's Users-grid column layout (order + visibility).
@@ -38,14 +43,25 @@ export async function saveUsersTablePreferencesAction(
   const user = await currentUserWithCapability("manageUsers");
   if (!user) return { ok: false, error: "forbidden" };
 
-  const clean = sanitizeUsersTableLayout(layout);
+  // Bound the array and the shape of each entry before it reaches the column
+  // whitelist below. Two layers on purpose: this one caps size and types,
+  // sanitizeUsersTableLayout decides which column keys actually exist.
+  const parsed = parseInput(usersTableLayoutSchema, layout);
+  if (!parsed.ok) return { ok: false, error: "validation" };
+
+  const clean = sanitizeUsersTableLayout(parsed.data as UsersTableLayout);
   const existing = (user.uiPreferences ?? {}) as UiPreferences;
   const next: UiPreferences = { ...existing, usersTable: clean };
 
-  await db
-    .update(users)
-    .set({ uiPreferences: next, updatedAt: new Date() })
-    .where(eq(users.id, user.id));
+  try {
+    await db
+      .update(users)
+      .set({ uiPreferences: next, updatedAt: new Date() })
+      .where(eq(users.id, user.id));
+  } catch (err) {
+    logServerError("saveUsersTablePreferencesAction", err, { userId: user.id });
+    return { ok: false, error: "validation" };
+  }
 
   revalidatePath("/admin/users");
   return { ok: true };

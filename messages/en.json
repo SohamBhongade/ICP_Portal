@@ -8,7 +8,6 @@
     "submit": "Submit",
     "search": "Search",
     "logout": "Sign out",
-    "comingSoon": "This section is coming soon.",
     "edit": "Edit",
     "add": "Add",
     "delete": "Delete"
@@ -52,22 +51,10 @@
     "analytics": "Analytics"
   },
   "dashboard": {
-    "welcome": "Welcome, {name}",
-    "roleLabel": "Role",
-    "placeholder": "Your dashboard is coming soon.",
-    "statTotalStudents": "Total students",
-    "statPendingRequests": "Pending requests",
-    "statOpenTickets": "Open tickets",
     "statAttendanceRate": "Attendance rate",
     "statFeeBalance": "Fee balance",
-    "statActiveStudents": "Active students",
-    "statClassesThisWeek": "Classes this week",
-    "breakdownTitle": "Active students by course & year",
-    "breakdownSubtitle": "Live enrolment across programmes",
-    "breakdownEmpty": "No active students enrolled yet.",
-    "totalLabel": "Total enrolled",
-    "yearLabel": "Year {year}",
-    "yearUnset": "Unspecified"
+    "welcomeBack": "Welcome back, {name}",
+    "welcomeSubtitle": "Your dashboard is ready. Use the menu to record attendance, manage fees, review accounts and open support requests."
   },
   "onboarding": {
     "title": "User Onboarding",

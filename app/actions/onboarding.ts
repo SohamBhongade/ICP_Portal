@@ -2,14 +2,20 @@
 
 // Phase 8 — Onboarding server actions.
 //
-// Entry points require the `manageUsers` capability (admin, principal, office
-// admin), re-verified server-side on every call — never trust the client. The
-// exception is deleteUserAction, which requires `deleteUsers` (admin only).
-//   - createUserAction:         manual single student / staff creation
-//   - bulkImportStudentsAction: CSV batch student creation
+// Every entry point re-verifies its capability SERVER-SIDE on each call — never
+// trust the client, and never rely on a hidden button:
+//   - createUserAction:         `createUsers` — ADMIN ONLY
+//     (the CSV/XLSX bulk path now lives in app/actions/import.ts, same gate)
+//   - updateUserAction:         `manageUsers` (admin / principal / office admin)
+//   - approve/rejectRequest:    `approveRequests` (admin / principal)
+//   - deleteUserAction:         `deleteUsers` (admin only)
 //
-// Business rules (per Phase 8 spec):
-//   - New accounts are created with status='active' (immediately usable).
+// Direct account creation is deliberately the narrowest gate of the lot: minting
+// an account outright bypasses the review queue entirely, so only an admin may
+// do it. Everyone else routes people through /request-account -> /admin/requests.
+//
+// Business rules:
+//   - Admin-created accounts are status='active' (immediately usable).
 //   - A temporary password is auto-hashed via bcrypt so the account can log in
 //     on day one. Pattern: 'Icp@' + <roll number> for students, and
 //     'Icp@' + <email local-part> for staff (who have no roll number).
@@ -29,6 +35,15 @@ import {
 import { currentUserWithCapability } from "@/lib/auth";
 import { canAssignRole, type Role } from "@/lib/auth/permissions";
 import { extractYear, normalizeCourse, resolveCourse } from "@/lib/courses";
+import { logServerError } from "@/lib/errors";
+import { RULES, checkRateLimit } from "@/lib/rate-limit";
+import { parseInput, type FieldErrors } from "@/lib/validation/core";
+import {
+  approveRequestSchema,
+  createUserSchema,
+  idSchema,
+  updateUserSchema,
+} from "@/lib/validation/schemas";
 
 /**
  * Derive the canonical course + academic year for a student from the raw course
@@ -63,44 +78,38 @@ export type CreateUserInput = {
   practicalBatch?: string;
 };
 
-/** One already-column-mapped CSV row (always a student). */
-export type CsvStudentRow = {
-  fullName: string;
-  studentId: string;
-  email?: string;
-  phone?: string;
-  course?: string;
-  className?: string;
-  practicalBatch?: string;
-};
-
 /** Stable error codes — the client translates these via onboarding.errors.<code>. */
 export type ActionError =
   | "forbidden"
+  | "validation"
+  | "rateLimited"
   | "missingName"
   | "missingRollNo"
   | "missingEmail"
   | "invalidEmail"
   | "invalidCourse"
+  | "weakPassword"
   | "duplicate"
   | "unknown";
 
 export type CreateUserResult =
   | { ok: true; id: number }
-  | { ok: false; error: ActionError };
-
-export type BulkImportResult =
-  | { ok: false; error: ActionError }
-  | {
-      ok: true;
-      created: number;
-      failed: { row: number; reason: ActionError }[];
-    };
+  | { ok: false; error: ActionError; fieldErrors?: FieldErrors };
 
 // Pragmatic email shape check (mirrors the client-side check).
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
-/** Returns the caller if they may manage users, else null. */
+/**
+ * Returns the caller if they may CREATE a brand-new account outright, else null.
+ * ADMIN ONLY (`createUsers`) — this is the authoritative check for every "add
+ * user directly" path (manual drawer + CSV import). Hiding the button in the UI
+ * is presentation only; this is the gate that actually enforces it.
+ */
+async function assertCreateUsers() {
+  return currentUserWithCapability("createUsers");
+}
+
+/** Returns the caller if they may EDIT existing users, else null. */
 async function assertManageUsers() {
   return currentUserWithCapability("manageUsers");
 }
@@ -114,6 +123,13 @@ async function assertApproveRequests() {
   return currentUserWithCapability("approveRequests");
 }
 
+/**
+ * bcrypt cost factor for every password this app writes. 12 is the project
+ * floor — db/create-admin.ts declares the same value for the CLI path. NOT
+ * exported: a "use server" module may only export async functions.
+ */
+const BCRYPT_COST = 12;
+
 /** Temporary first-login password. See file header for the pattern. */
 function tempPassword(role: OnboardRole, studentId?: string, email?: string) {
   const base =
@@ -126,18 +142,28 @@ function tempPassword(role: OnboardRole, studentId?: string, email?: string) {
 export async function createUserAction(
   input: CreateUserInput,
 ): Promise<CreateUserResult> {
-  const actor = await assertManageUsers();
+  // ADMIN ONLY — creating an account outright skips the request queue.
+  const actor = await assertCreateUsers();
   if (!actor) return { ok: false, error: "forbidden" };
 
-  const role = input.role;
+  // Structural validation before any business DB call. Strict mode is doing real
+  // work here: without it a crafted payload could carry `status` or
+  // `passwordHash` alongside the legitimate fields.
+  const parsed = parseInput(createUserSchema, input);
+  if (!parsed.ok) {
+    return { ok: false, error: "validation", fieldErrors: parsed.fieldErrors };
+  }
+  const data = parsed.data;
+
+  const role = data.role;
   // Anti-escalation: an actor can never mint a role above their own tier.
   if (!canAssignRole(actor.role as Role, role)) {
     return { ok: false, error: "forbidden" };
   }
-  const fullName = input.fullName?.trim() ?? "";
-  const email = input.email?.trim().toLowerCase() || undefined;
-  const phone = input.phone?.trim() || undefined;
-  const studentId = input.studentId?.trim() || undefined;
+  const fullName = data.fullName;
+  const email = data.email;
+  const phone = data.phone;
+  const studentId = data.studentId;
 
   if (!fullName) return { ok: false, error: "missingName" };
 
@@ -154,7 +180,7 @@ export async function createUserAction(
 
   const passwordHash = await bcrypt.hash(
     tempPassword(role, studentId, email),
-    10,
+    BCRYPT_COST,
   );
 
   const isStudent = role === "student";
@@ -164,31 +190,35 @@ export async function createUserAction(
   let course: string | undefined;
   let year: number | undefined;
   if (isStudent) {
-    const resolved = resolveStudentCourseYear(input.course, input.className);
+    const resolved = resolveStudentCourseYear(data.course, data.className);
     if (!resolved.ok) return { ok: false, error: "invalidCourse" };
     course = resolved.course;
     year = resolved.year;
   }
 
-  const res = await db
-    .insert(users)
-    .values({
-      fullName,
-      email,
-      phone,
-      studentId: isStudent ? studentId : undefined,
-      role,
-      status: "active",
-      course,
-      year,
-      className: isStudent ? input.className?.trim() || undefined : undefined,
-      practicalBatch: isStudent
-        ? input.practicalBatch?.trim() || undefined
-        : undefined,
-      passwordHash,
-    })
-    .onConflictDoNothing()
-    .returning({ id: users.id });
+  let res: { id: number }[];
+  try {
+    res = await db
+      .insert(users)
+      .values({
+        fullName,
+        email,
+        phone,
+        studentId: isStudent ? studentId : undefined,
+        role,
+        status: "active",
+        course,
+        year,
+        className: isStudent ? data.className : undefined,
+        practicalBatch: isStudent ? data.practicalBatch : undefined,
+        passwordHash,
+      })
+      .onConflictDoNothing()
+      .returning({ id: users.id });
+  } catch (err) {
+    logServerError("createUserAction", err, { role });
+    return { ok: false, error: "unknown" };
+  }
 
   // No row back => a UNIQUE constraint (studentId or email) already exists.
   if (res.length === 0) return { ok: false, error: "duplicate" };
@@ -197,83 +227,29 @@ export async function createUserAction(
   return { ok: true, id: res[0].id };
 }
 
-export async function bulkImportStudentsAction(
-  rows: CsvStudentRow[],
-): Promise<BulkImportResult> {
-  if (!(await assertManageUsers())) return { ok: false, error: "forbidden" };
-
-  let created = 0;
-  const failed: { row: number; reason: ActionError }[] = [];
-
-  for (let i = 0; i < rows.length; i++) {
-    const r = rows[i];
-    const fullName = r.fullName?.trim() ?? "";
-    const studentId = r.studentId?.trim() ?? "";
-    const email = r.email?.trim().toLowerCase() || undefined;
-
-    // Row numbers are 1-based for human-friendly reporting.
-    if (!fullName) {
-      failed.push({ row: i + 1, reason: "missingName" });
-      continue;
-    }
-    if (!studentId) {
-      failed.push({ row: i + 1, reason: "missingRollNo" });
-      continue;
-    }
-    if (email && !EMAIL_RE.test(email)) {
-      failed.push({ row: i + 1, reason: "invalidEmail" });
-      continue;
-    }
-
-    // Normalize the course to its canonical value + academic year. A junk course
-    // fails ONLY that row (with its 1-based number) — good rows still import.
-    const resolved = resolveStudentCourseYear(r.course, r.className);
-    if (!resolved.ok) {
-      failed.push({ row: i + 1, reason: "invalidCourse" });
-      continue;
-    }
-    const { course, year } = resolved;
-
-    try {
-      const passwordHash = await bcrypt.hash(
-        tempPassword("student", studentId, email),
-        10,
-      );
-      const res = await db
-        .insert(users)
-        .values({
-          fullName,
-          studentId,
-          email,
-          phone: r.phone?.trim() || undefined,
-          role: "student",
-          status: "active",
-          course,
-          year,
-          className: r.className?.trim() || undefined,
-          practicalBatch: r.practicalBatch?.trim() || undefined,
-          passwordHash,
-        })
-        .onConflictDoNothing()
-        .returning({ id: users.id });
-
-      if (res.length === 0) failed.push({ row: i + 1, reason: "duplicate" });
-      else created++;
-    } catch {
-      failed.push({ row: i + 1, reason: "unknown" });
-    }
-  }
-
-  if (created > 0) revalidatePath("/admin/users");
-  return { ok: true, created, failed };
-}
+// bulkImportStudentsAction was REMOVED in Phase 4.
+//
+// It accepted an array of rows that the BROWSER had parsed out of a CSV, which
+// meant the server never saw the uploaded file and had no way to enforce a size
+// limit, a real file-type check, a row cap, a cell-length cap, or CSV formula
+// neutralization — every one of those checks lived in code an attacker
+// controlled. Anyone could call the action directly with an arbitrary payload.
+//
+// The import now uploads the FILE and parses it server-side. See
+// app/actions/import.ts (parseImportFileAction + importStudentsFileAction) and
+// lib/import/parse.ts.
 
 // ---------- Account request review (admin-only) ----------
 //
-// A self-service signup arrives as a status='pending' student row (see
-// requestAccountAction). The admin may correct typos in the same payload, then:
-//   - approveRequestAction: apply edits + flip status='active'
-//   - rejectRequestAction:  flip status='rejected'
+// A self-service signup arrives as a status='pending' row with a NULL
+// password_hash (see requestAccountAction) — it holds no credential at all. The
+// admin may correct typos in the same payload, then:
+//   - approveRequestAction: apply edits + flip status='active' + ASSIGN THE
+//     PASSWORD. Approval is the only moment a requested account gains a
+//     credential: either one the approver typed, or the default temporary
+//     'Icp@<roll number | email local-part>'. The assigned password is returned
+//     once, so the approver can pass it on to the applicant.
+//   - rejectRequestAction:  flip status='rejected' (still no credential).
 // Both only touch rows that are STILL pending, so a double-click or stale page
 // can never re-open a decided request.
 
@@ -292,11 +268,22 @@ export type ApproveRequestInput = {
   employeeId?: string;
   department?: string;
   designation?: string;
+  // Optional password the approver typed. Blank/omitted -> the temporary
+  // 'Icp@<roll | email local-part>' default is generated instead.
+  password?: string;
 };
 
 export type RequestResult =
   | { ok: true }
   | { ok: false; error: ActionError };
+
+/** Approval echoes back the password that was assigned, for handoff. */
+export type ApproveRequestResult =
+  | { ok: true; password: string }
+  | { ok: false; error: ActionError; fieldErrors?: FieldErrors };
+
+/** Shortest password an approver may set by hand. */
+const MIN_ASSIGNED_PASSWORD = 6;
 
 function revalidateRequestViews() {
   revalidatePath("/admin/requests");
@@ -306,14 +293,31 @@ function revalidateRequestViews() {
 
 export async function approveRequestAction(
   input: ApproveRequestInput,
-): Promise<RequestResult> {
+): Promise<ApproveRequestResult> {
   // Approvals are Admin + Principal only (stricter than manageUsers).
   if (!(await assertApproveRequests())) return { ok: false, error: "forbidden" };
 
-  const isStaff = input.role !== "student";
-  const fullName = input.fullName?.trim() ?? "";
-  const studentId = input.studentId?.trim() || undefined;
-  const email = input.email?.trim().toLowerCase() || undefined;
+  const parsed = parseInput(approveRequestSchema, input);
+  if (!parsed.ok) {
+    return { ok: false, error: "validation", fieldErrors: parsed.fieldErrors };
+  }
+  const data = parsed.data;
+
+  // PASSWORD-OPERATION THROTTLE. Approval mints a credential, so it is rate
+  // limited alongside the other password paths.
+  const approver = await assertApproveRequests();
+  const approvalLimit = await checkRateLimit(
+    RULES.passwordOpUser,
+    String(approver?.id ?? "unknown"),
+  );
+  if (!approvalLimit.allowed) {
+    return { ok: false, error: "rateLimited" };
+  }
+
+  const isStaff = data.role !== "student";
+  const fullName = data.fullName;
+  const studentId = data.studentId;
+  const email = data.email;
 
   if (!fullName) return { ok: false, error: "missingName" };
   if (isStaff) {
@@ -327,6 +331,17 @@ export async function approveRequestAction(
     }
   }
 
+  // Assign the credential. An approver-supplied password wins; otherwise the
+  // deterministic temporary one. Either way the row leaves this action WITH a
+  // hash, so an approved account is always actually usable.
+  const typed = data.password ?? "";
+  if (typed && typed.length < MIN_ASSIGNED_PASSWORD) {
+    return { ok: false, error: "weakPassword" };
+  }
+  const assignedPassword =
+    typed || tempPassword(data.role, studentId, email);
+  const passwordHash = await bcrypt.hash(assignedPassword, BCRYPT_COST);
+
   try {
     const res = await db
       .update(users)
@@ -334,28 +349,31 @@ export async function approveRequestAction(
         fullName,
         studentId: isStaff ? null : studentId,
         email,
-        phone: input.phone?.trim() || null,
-        course: isStaff ? null : input.course?.trim() || null,
-        className: isStaff ? null : input.className?.trim() || null,
-        practicalBatch: isStaff ? null : input.practicalBatch?.trim() || null,
+        phone: data.phone ?? null,
+        course: isStaff ? null : (data.course ?? null),
+        className: isStaff ? null : (data.className ?? null),
+        practicalBatch: isStaff ? null : (data.practicalBatch ?? null),
         // Professional details are the mirror image — staff keep them, students clear them.
-        employeeId: isStaff ? input.employeeId?.trim() || null : null,
-        department: isStaff ? input.department?.trim() || null : null,
-        designation: isStaff ? input.designation?.trim() || null : null,
+        employeeId: isStaff ? (data.employeeId ?? null) : null,
+        department: isStaff ? (data.department ?? null) : null,
+        designation: isStaff ? (data.designation ?? null) : null,
+        passwordHash,
         status: "active",
         updatedAt: new Date(),
       })
-      .where(and(eq(users.id, input.id), eq(users.status, "pending")))
+      .where(and(eq(users.id, data.id), eq(users.status, "pending")))
       .returning({ id: users.id });
 
     if (res.length === 0) return { ok: false, error: "unknown" };
-  } catch {
-    // A UNIQUE clash on the edited studentId/email surfaces here.
+  } catch (err) {
+    // A UNIQUE clash on the edited studentId/email surfaces here. The driver
+    // message names columns, so it is logged, never returned.
+    logServerError("approveRequestAction", err, { id: data.id });
     return { ok: false, error: "duplicate" };
   }
 
   revalidateRequestViews();
-  return { ok: true };
+  return { ok: true, password: assignedPassword };
 }
 
 // ---------- Edit user details (manageUsers: admin / principal / office admin) ----------
@@ -380,8 +398,14 @@ export type UpdateUserInput = {
 };
 
 export type UpdateUserResult =
-  | { ok: true }
-  | { ok: false; error: ActionError | "notFound" };
+  // `assignedPassword` is set only when this edit activated an account that had
+  // no credential yet (see the backfill below), so the admin can hand it over.
+  | { ok: true; assignedPassword?: string }
+  | {
+      ok: false;
+      error: ActionError | "notFound";
+      fieldErrors?: FieldErrors;
+    };
 
 export async function updateUserAction(
   input: UpdateUserInput,
@@ -389,19 +413,30 @@ export async function updateUserAction(
   const actor = await assertManageUsers();
   if (!actor) return { ok: false, error: "forbidden" };
 
+  const parsed = parseInput(updateUserSchema, input);
+  if (!parsed.ok) {
+    return { ok: false, error: "validation", fieldErrors: parsed.fieldErrors };
+  }
+  const data = parsed.data;
+
   // Load the CURRENT role/status from the DB — never trust the client for which
   // field set applies or for the user's identity.
   const [existing] = await db
-    .select({ id: users.id, role: users.role, status: users.status })
+    .select({
+      id: users.id,
+      role: users.role,
+      status: users.status,
+      passwordHash: users.passwordHash,
+    })
     .from(users)
-    .where(eq(users.id, input.id))
+    .where(eq(users.id, data.id))
     .limit(1);
   if (!existing) return { ok: false, error: "notFound" };
 
   const isStaff = existing.role !== "student";
-  const fullName = input.fullName?.trim() ?? "";
-  const email = input.email?.trim().toLowerCase() || undefined;
-  const studentId = input.studentId?.trim() || undefined;
+  const fullName = data.fullName;
+  const email = data.email;
+  const studentId = data.studentId;
 
   if (!fullName) return { ok: false, error: "missingName" };
   if (isStaff) {
@@ -420,7 +455,7 @@ export async function updateUserAction(
   let course: string | null = null;
   let year: number | null = null;
   if (!isStaff) {
-    const resolved = resolveStudentCourseYear(input.course, input.className);
+    const resolved = resolveStudentCourseYear(data.course, data.className);
     if (!resolved.ok) return { ok: false, error: "invalidCourse" };
     course = resolved.course ?? null;
     year = resolved.year ?? null;
@@ -429,8 +464,23 @@ export async function updateUserAction(
   // Whitelist the status; never let an actor change their OWN status (a demotion
   // to pending/rejected would lock them out of the console they're using).
   const allowed = ["pending", "active", "rejected"] as const;
-  const requested = allowed.includes(input.status) ? input.status : existing.status;
-  const nextStatus = actor.id === input.id ? existing.status : requested;
+  const requested = allowed.includes(data.status) ? data.status : existing.status;
+  const nextStatus = actor.id === data.id ? existing.status : requested;
+
+  // Credential backfill. A pending self-service signup carries a NULL
+  // password_hash, so activating it from this screen (rather than through the
+  // approval queue) would otherwise leave an "active" account that can never
+  // sign in. Mint the same temporary password the approval path uses, and
+  // report it back so the admin can pass it on. Accounts that already have a
+  // hash are never touched here.
+  const needsCredential =
+    nextStatus === "active" && !existing.passwordHash;
+  const assignedPassword = needsCredential
+    ? tempPassword(existing.role as Role, studentId, email)
+    : undefined;
+  const passwordHash = assignedPassword
+    ? await bcrypt.hash(assignedPassword, BCRYPT_COST)
+    : undefined;
 
   try {
     const res = await db
@@ -438,27 +488,30 @@ export async function updateUserAction(
       .set({
         fullName,
         email: email ?? null,
-        phone: input.phone?.trim() || null,
+        phone: data.phone ?? null,
         studentId: isStaff ? null : studentId,
         course: isStaff ? null : course,
         year: isStaff ? null : year,
-        className: isStaff ? null : input.className?.trim() || null,
-        practicalBatch: isStaff ? null : input.practicalBatch?.trim() || null,
+        className: isStaff ? null : (data.className ?? null),
+        practicalBatch: isStaff ? null : (data.practicalBatch ?? null),
+        ...(passwordHash ? { passwordHash } : {}),
         status: nextStatus,
         updatedAt: new Date(),
       })
-      .where(eq(users.id, input.id))
+      .where(eq(users.id, data.id))
       .returning({ id: users.id });
 
     if (res.length === 0) return { ok: false, error: "notFound" };
-  } catch {
+  } catch (err) {
     // A UNIQUE clash on the edited studentId/email surfaces here.
+    logServerError("updateUserAction", err, { id: data.id });
     return { ok: false, error: "duplicate" };
   }
 
   revalidatePath("/admin/users");
   revalidatePath("/admin");
-  return { ok: true };
+  revalidatePath("/admin/requests");
+  return { ok: true, assignedPassword };
 }
 
 // ---------- Account deletion (admin-only) ----------
@@ -470,14 +523,37 @@ export async function updateUserAction(
 
 export type DeleteUserResult =
   | { ok: true; message: string }
-  | { ok: false; error: "forbidden" | "self" | "notFound" | "deleteFailed" };
+  | {
+      ok: false;
+      error:
+        | "forbidden"
+        | "self"
+        | "notFound"
+        | "deleteFailed"
+        | "rateLimited";
+      retryAfter?: number;
+    };
 
 export async function deleteUserAction(
-  userId: number,
+  rawUserId: number,
 ): Promise<DeleteUserResult> {
   // Deletion is the single most destructive action — admin only (deleteUsers).
   const admin = await currentUserWithCapability("deleteUsers");
   if (!admin) return { ok: false, error: "forbidden" };
+
+  const parsedId = parseInput(idSchema, rawUserId);
+  if (!parsedId.ok) return { ok: false, error: "notFound" };
+  const userId = parsedId.data;
+
+  // BULK-DELETE THROTTLE. Deletion cascades across tickets, ledgers and
+  // attendance, so a script driving this action in a loop is the most
+  // destructive thing a compromised admin session can do. Capped per admin,
+  // well above any plausible manual rate.
+  const limit = await checkRateLimit(RULES.deleteUser, String(admin.id));
+  if (!limit.allowed) {
+    return { ok: false, error: "rateLimited", retryAfter: limit.retryAfter };
+  }
+
   if (admin.id === userId) return { ok: false, error: "self" };
 
   // Cascading delete: remove dependent rows (children) before the user (parent)
@@ -516,7 +592,8 @@ export async function deleteUserAction(
       .delete(users)
       .where(eq(users.id, userId))
       .returning({ id: users.id });
-  } catch {
+  } catch (err) {
+    logServerError("deleteUserAction", err, { userId });
     return { ok: false, error: "deleteFailed" };
   }
 
@@ -532,10 +609,14 @@ export async function deleteUserAction(
 }
 
 export async function rejectRequestAction(
-  id: number,
+  rawId: number,
 ): Promise<RequestResult> {
   // Rejections are Admin + Principal only (stricter than manageUsers).
   if (!(await assertApproveRequests())) return { ok: false, error: "forbidden" };
+
+  const parsedId = parseInput(idSchema, rawId);
+  if (!parsedId.ok) return { ok: false, error: "validation" };
+  const id = parsedId.data;
 
   const res = await db
     .update(users)

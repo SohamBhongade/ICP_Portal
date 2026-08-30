@@ -25,14 +25,91 @@ export type SessionPayload = {
   exp: number; // epoch ms
 };
 
+/**
+ * Thrown when AUTH_SECRET itself is misconfigured. Distinct from an invalid or
+ * expired token so verifySessionToken can RE-THROW it instead of swallowing it:
+ * a bad secret must surface as a loud server error, never as "everyone is
+ * quietly signed out" (which would look like a working app with no sessions).
+ */
+export class AuthConfigError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "AuthConfigError";
+  }
+}
+
+// Minimum acceptable secret length. 32 chars is the floor for an HMAC-SHA256
+// key with a sensible margin; `openssl rand -hex 32` produces 64.
+const MIN_SECRET_LENGTH = 32;
+
+// Values that show up in tutorials, .env.example files and copy-pasted configs.
+// Compared case-insensitively; any match is treated as "no secret at all".
+const PLACEHOLDER_SECRETS = new Set([
+  "secret",
+  "changeme",
+  "change-me",
+  "your-secret-here",
+  "your_secret_here",
+  "auth_secret",
+  "authsecret",
+  "development",
+  "dev",
+  "test",
+  "password",
+  "supersecret",
+  "super-secret",
+  "replace-me",
+  "todo",
+]);
+
+/**
+ * Read AUTH_SECRET and FAIL CLOSED if it is missing or weak.
+ *
+ * There is deliberately NO fallback default: an app that silently signs tokens
+ * with a guessable key is worse than one that refuses to start, because every
+ * session cookie it ever issued would be forgeable. Rejected cases:
+ *   - unset / empty
+ *   - shorter than MIN_SECRET_LENGTH
+ *   - a well-known placeholder value
+ *   - a single repeated character (e.g. "aaaa…")
+ */
 function getSecret(): string {
   const secret = process.env.AUTH_SECRET;
-  if (!secret) {
-    throw new Error(
-      "AUTH_SECRET is not set. Add a strong random value to .env.local.",
+
+  if (!secret || !secret.trim()) {
+    throw new AuthConfigError(
+      "AUTH_SECRET is not set. Session signing is disabled and every request " +
+        "will fail closed. Generate one with `openssl rand -hex 32` and add it " +
+        "to .env.local (and to your hosting provider's environment).",
     );
   }
-  return secret;
+
+  const value = secret.trim();
+
+  if (value.length < MIN_SECRET_LENGTH) {
+    throw new AuthConfigError(
+      `AUTH_SECRET is too weak: ${value.length} characters, minimum is ` +
+        `${MIN_SECRET_LENGTH}. A short key makes session cookies forgeable. ` +
+        "Regenerate it with `openssl rand -hex 32`.",
+    );
+  }
+
+  if (PLACEHOLDER_SECRETS.has(value.toLowerCase())) {
+    throw new AuthConfigError(
+      "AUTH_SECRET is a well-known placeholder value. Session cookies signed " +
+        "with it are trivially forgeable. Regenerate it with " +
+        "`openssl rand -hex 32`.",
+    );
+  }
+
+  if (new Set(value).size === 1) {
+    throw new AuthConfigError(
+      "AUTH_SECRET is a single repeated character and carries no entropy. " +
+        "Regenerate it with `openssl rand -hex 32`.",
+    );
+  }
+
+  return value;
 }
 
 const encoder = new TextEncoder();
@@ -105,11 +182,16 @@ export async function verifySessionToken(
       decoder.decode(base64UrlToBytes(data)),
     ) as SessionPayload;
 
+    // Expiry is MANDATORY and re-checked on every single verification, so a
+    // token with no exp, a non-numeric exp, or a past exp is never accepted.
     if (typeof payload.exp !== "number" || Date.now() > payload.exp) {
       return null;
     }
     return payload;
-  } catch {
+  } catch (err) {
+    // A misconfigured AUTH_SECRET is an operator error, not a bad token —
+    // re-throw so it surfaces loudly instead of masquerading as "signed out".
+    if (err instanceof AuthConfigError) throw err;
     return null;
   }
 }

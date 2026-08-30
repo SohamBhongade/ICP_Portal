@@ -21,6 +21,10 @@ import {
   type OnboardRole,
 } from "@/app/actions/onboarding";
 import type { Role } from "@/lib/auth/permissions";
+import {
+  fieldErrorSuffix,
+  type FieldErrors,
+} from "@/lib/validation/client";
 import type { ToastKind } from "./UsersContent";
 
 // Translation keys per role (mirrors ROLE_LABEL in UsersContent).
@@ -52,6 +56,8 @@ export function CreateUserDrawer({
   const router = useRouter();
   const [pending, startTransition] = useTransition();
   const [error, setError] = useState<ActionError | null>(null);
+  // Field-level detail from the server schema, appended to the error line.
+  const [fieldErrors, setFieldErrors] = useState<FieldErrors | undefined>();
 
   // Default to student when allowed, else the first assignable role.
   const [role, setRole] = useState<OnboardRole>(
@@ -90,13 +96,14 @@ export function CreateUserDrawer({
         onClose();
       } else {
         setError(result.error);
+        setFieldErrors(result.fieldErrors);
         notify("error", t("onboarding.toast.createFailed"));
       }
     });
   };
 
   return (
-    <div className="fixed inset-0 z-40 flex justify-end">
+    <div className="fixed inset-0 z-50 flex justify-end">
       {/* Overlay */}
       <button
         type="button"
@@ -230,6 +237,7 @@ export function CreateUserDrawer({
           {error && (
             <p className="rounded-md border border-danger/40 bg-lavender px-3 py-2 text-sm text-danger">
               {t(`onboarding.errors.${error}`)}
+              {fieldErrorSuffix(fieldErrors)}
             </p>
           )}
 

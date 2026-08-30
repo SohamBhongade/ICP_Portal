@@ -1,41 +1,26 @@
-// Student overview (Phase 12) — live metrics.
+// Student Overview.
 //
-// Cumulative attendance % (present / total) + outstanding fee balance
-// (payments − charges; negative = owes).
+// Phase 7 CLEARED this page. It previously queried the student's attendance
+// ledger and fee ledger to render "Attendance rate" and "Fee balance" stat
+// tiles. Both queries and the StudentOverview component were removed; route,
+// shell, sidebar and header are untouched.
+//
+// The data itself is untouched and still reachable from the sidebar at
+// /student/attendance and /student/fees.
 
-import { eq } from "drizzle-orm";
-import { db } from "@/db";
-import { attendanceLogs, feeLedgers } from "@/db/schema";
 import { requireUser } from "@/lib/auth";
-import { computeBalances } from "@/lib/fees";
-import { StudentOverview } from "./StudentOverview";
+import { OverviewWelcome } from "@/components/dashboard/OverviewWelcome";
+import { getT } from "@/lib/i18n/server";
 
 export default async function StudentDashboardPage() {
   const user = await requireUser();
-
-  const [attendance, ledger] = await Promise.all([
-    db
-      .select({ status: attendanceLogs.status })
-      .from(attendanceLogs)
-      .where(eq(attendanceLogs.studentId, user.id)),
-    db
-      .select({ type: feeLedgers.type, amount: feeLedgers.amount })
-      .from(feeLedgers)
-      .where(eq(feeLedgers.studentId, user.id)),
-  ]);
-
-  const totalClasses = attendance.length;
-  const present = attendance.filter((a) => a.status === "present").length;
-  const attendancePct = totalClasses
-    ? Math.round((present / totalClasses) * 100)
-    : 0;
-  const outstanding = computeBalances(ledger).balance;
+  const t = await getT();
 
   return (
-    <StudentOverview
-      attendancePct={attendancePct}
-      totalClasses={totalClasses}
-      outstanding={outstanding}
+    <OverviewWelcome
+      roleLabel={t("onboarding.roleStudent")}
+      greeting={t("dashboard.welcomeBack", { name: user.fullName })}
+      subtitle={t("dashboard.welcomeSubtitle")}
     />
   );
 }

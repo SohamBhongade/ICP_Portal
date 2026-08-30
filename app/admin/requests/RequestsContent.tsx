@@ -4,11 +4,17 @@
 // shown as live inputs, so the admin can fix typos in place, then Approve
 // (→ active) or Reject (→ rejected). Approve sends whatever is currently in the
 // card's fields. A tiny toast (shared across cards) reports the result.
+//
+// A request carries NO credential (password_hash is NULL until approval), so
+// each card also takes the password to assign. Leave it blank for the default
+// temporary 'Icp@<roll number | email local-part>'. The approval toast echoes
+// whichever password was set — the only time it is shown — so the approver can
+// pass it to the applicant.
 
 import { useMemo, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { Search, UserCheck } from "lucide-react";
-import { useT, useLocale } from "@/components/i18n/LanguageProvider";
+import { useT } from "@/components/i18n/LanguageProvider";
 import { Editable } from "@/components/edit-mode/Editable";
 import {
   approveRequestAction,
@@ -16,6 +22,7 @@ import {
   type ActionError,
 } from "@/app/actions/onboarding";
 import type { Role } from "@/lib/auth/permissions";
+import { formatDisplayDate } from "@/lib/dates";
 
 type Item = { value: string; label: string };
 
@@ -65,9 +72,11 @@ export function RequestsContent({
     null,
   );
 
-  const notify = (kind: ToastKind, msg: string) => {
+  // Approval toasts carry the assigned password, which the admin has to read and
+  // copy, so they linger noticeably longer than a plain success/error notice.
+  const notify = (kind: ToastKind, msg: string, ms = 5000) => {
     setToast({ kind, msg });
-    window.setTimeout(() => setToast(null), 5000);
+    window.setTimeout(() => setToast(null), ms);
   };
 
   const filtered = useMemo(() => {
@@ -132,7 +141,7 @@ export function RequestsContent({
       {toast && (
         <div
           role="status"
-          className={`fixed bottom-4 right-4 z-50 max-w-xs rounded-md border px-3 py-2 text-sm shadow-md ${
+          className={`fixed bottom-4 right-4 z-60 max-w-xs rounded-md border px-3 py-2 text-sm shadow-md ${
             toast.kind === "success"
               ? "border-teal/40 bg-mint text-ink"
               : "border-danger/40 bg-lavender text-ink"
@@ -159,10 +168,9 @@ function RequestCard({
   courseOptions: Item[];
   classOptions: Item[];
   batchOptions: Item[];
-  onResult: (kind: ToastKind, msg: string) => void;
+  onResult: (kind: ToastKind, msg: string, ms?: number) => void;
 }) {
   const t = useT();
-  const { locale } = useLocale();
   const router = useRouter();
   const [busy, startTransition] = useTransition();
   const [action, setAction] = useState<"approve" | "reject" | null>(null);
@@ -179,23 +187,26 @@ function RequestCard({
   const [employeeId, setEmployeeId] = useState(request.employeeId ?? "");
   const [department, setDepartment] = useState(request.department ?? "");
   const [designation, setDesignation] = useState(request.designation ?? "");
+  // Blank => the server generates the temporary default.
+  const [password, setPassword] = useState("");
 
   const isStaff = request.role !== "student";
   const canApprove =
     fullName.trim() !== "" &&
     (isStaff ? email.trim() !== "" : studentId.trim() !== "");
 
+  // formatDisplayDate pins locale AND time zone, so this renders identically
+  // during SSR and hydration. Raw toLocaleDateString(locale, ...) still varies
+  // by the HOST's zone, which put server and client a day apart after 18:30 UTC.
   const fmtDate = (ms: number) =>
-    new Date(ms).toLocaleDateString(locale, {
-      day: "numeric",
-      month: "short",
-      year: "numeric",
-    });
+    formatDisplayDate(ms, { day: "numeric", month: "short", year: "numeric" });
 
   const errorMessage = (error: ActionError) =>
     error === "duplicate"
       ? t("requests.toast.duplicate")
-      : t("requests.toast.failed");
+      : error === "weakPassword"
+        ? t("requests.toast.weakPassword")
+        : t("requests.toast.failed");
 
   const approve = () => {
     setAction("approve");
@@ -213,12 +224,17 @@ function RequestCard({
         employeeId,
         department,
         designation,
+        password,
       });
       setAction(null);
       if (result.ok) {
         onResult(
           "success",
-          t("requests.toast.approved", { name: fullName.trim() }),
+          t("requests.toast.approved", {
+            name: fullName.trim(),
+            password: result.password,
+          }),
+          30000,
         );
         router.refresh();
       } else {
@@ -347,6 +363,23 @@ function RequestCard({
             </CardField>
           </>
         )}
+      </div>
+
+      {/* Credential assigned on approval. Blank = the temporary default. */}
+      <div className="mt-3 rounded-md border border-line bg-canvas p-3">
+        <CardField label={t("requests.assignPassword")}>
+          <input
+            type="text"
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+            placeholder={t("requests.assignPasswordPlaceholder")}
+            autoComplete="off"
+            className={inputClass}
+          />
+        </CardField>
+        <p className="mt-1 text-xs text-muted">
+          {t("requests.assignPasswordHint")}
+        </p>
       </div>
 
       <div className="mt-4 flex items-center justify-end gap-2 border-t border-line pt-3">

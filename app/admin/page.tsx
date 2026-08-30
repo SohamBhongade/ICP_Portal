@@ -1,67 +1,37 @@
-// Admin overview (Phase 12 / Phase 3 overhaul) — live metrics.
+// Admin Overview.
 //
-// Server component: a SINGLE grouped aggregation (active students by course +
-// year) supplies both the headline "Active students" total and the course/year
-// breakdown widget. The breakdown is fully DYNAMIC — it groups over whatever
-// course/year values actually exist, so new programmes (M.Pharm, BCA, …) and
-// years appear automatically with no code change.
+// Phase 7 CLEARED this page. It previously ran a grouped SQL aggregation
+// (active students by course + year) to feed an "Active students" stat tile and
+// a per-course/per-year breakdown widget. Both the query and the AdminOverview
+// component were removed; the route, the layout shell, the sidebar and the
+// header are untouched.
+//
+// The capability guard stays exactly as it was — clearing the content region is
+// not a reason to loosen who may reach the route.
 
-import { and, eq, sql } from "drizzle-orm";
-import { db } from "@/db";
-import { users } from "@/db/schema";
 import { requireAnyCapability } from "@/lib/auth";
-import { AdminOverview, type StudentBreakdown } from "./AdminOverview";
+import { OverviewWelcome } from "@/components/dashboard/OverviewWelcome";
+import { getT } from "@/lib/i18n/server";
+import type { Role } from "@/lib/auth/permissions";
+
+const ROLE_LABEL_KEY: Record<Role, string> = {
+  admin: "onboarding.roleAdmin",
+  principal: "onboarding.rolePrincipal",
+  "office admin": "onboarding.roleOfficeAdmin",
+  faculty: "onboarding.roleFaculty",
+  staff: "onboarding.roleStaff",
+  student: "onboarding.roleStudent",
+};
 
 export default async function AdminDashboardPage() {
-  await requireAnyCapability("manageUsers", "fees", "settings");
+  const user = await requireAnyCapability("manageUsers", "fees", "settings");
+  const t = await getT();
 
-  // Aggregate in SQL: one row per (course, year) with its active-student count.
-  const groups = await db
-    .select({
-      course: users.course,
-      year: users.year,
-      count: sql<number>`count(*)`,
-    })
-    .from(users)
-    .where(and(eq(users.role, "student"), eq(users.status, "active")))
-    .groupBy(users.course, users.year);
-
-  // Fold the grouped rows into a dynamic per-course breakdown. Course values are
-  // already canonical (lib/courses), so we group on them as-is.
-  const byCourse = new Map<
-    string,
-    { total: number; years: Map<number, number> }
-  >();
-  let activeStudents = 0;
-
-  for (const g of groups) {
-    const n = Number(g.count);
-    activeStudents += n;
-    if (!g.course) continue; // students without a course still count in the total
-    const entry = byCourse.get(g.course) ?? { total: 0, years: new Map() };
-    entry.total += n;
-    if (g.year != null) {
-      entry.years.set(g.year, (entry.years.get(g.year) ?? 0) + n);
-    }
-    byCourse.set(g.course, entry);
-  }
-
-  const breakdown: StudentBreakdown = [...byCourse.entries()]
-    .map(([course, v]) => {
-      const years = [...v.years.entries()]
-        .map(([year, count]) => ({ year, count }))
-        .sort((a, b) => a.year - b.year);
-      const knownYear = years.reduce((sum, y) => sum + y.count, 0);
-      return {
-        course,
-        total: v.total,
-        years,
-        // Students in this course whose year is unset — so the numbers reconcile.
-        unspecified: v.total - knownYear,
-      };
-    })
-    // Biggest cohorts first, then alphabetical for stable ordering.
-    .sort((a, b) => b.total - a.total || a.course.localeCompare(b.course));
-
-  return <AdminOverview activeStudents={activeStudents} breakdown={breakdown} />;
+  return (
+    <OverviewWelcome
+      roleLabel={t(ROLE_LABEL_KEY[user.role as Role])}
+      greeting={t("dashboard.welcomeBack", { name: user.fullName })}
+      subtitle={t("dashboard.welcomeSubtitle")}
+    />
+  );
 }
