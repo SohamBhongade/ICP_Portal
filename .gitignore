@@ -30,8 +30,13 @@ yarn-debug.log*
 yarn-error.log*
 .pnpm-debug.log*
 
-# env files (can opt-in for committing if needed)
+# env files — every variant is ignored: .env, .env.local, .env.production, etc.
 .env*
+
+# ...except the template, which holds only KEY= with no values and MUST be
+# committed so a new machine knows what to fill in. Verified with
+# `git check-ignore -v .env.example` (returns nothing = trackable).
+!.env.example
 
 # vercel
 .vercel
