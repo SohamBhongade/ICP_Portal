@@ -174,7 +174,23 @@
       "fieldCourse": "Course",
       "fieldYear": "Year",
       "fieldClass": "Class",
-      "fieldBatch": "Practical batch"
+      "fieldBatch": "Practical batch",
+      "errors": {
+        "forbidden": "Only an administrator can import students.",
+        "rateLimited": "Too many imports. Please wait about {minutes} minute(s) and try again.",
+        "missingFile": "No file was received. Please choose a file and try again.",
+        "badMapping": "The column mapping couldn't be read. Reload the page and try again.",
+        "tooLarge": "That file is larger than the 5 MB limit. Split it into smaller files.",
+        "emptyFile": "That file is empty.",
+        "unsupportedType": "That doesn't look like a .csv or .xlsx file. Check the file and try again.",
+        "legacyXls": "Old-style .xls files aren't supported. Re-save it as .xlsx or .csv.",
+        "tooManyRows": "That file has more than 2,000 student rows. Split it into smaller files.",
+        "tooManyColumns": "That file has too many columns (limit 64).",
+        "cellTooLong": "One of the cells is longer than 500 characters. Shorten it and try again.",
+        "noRows": "No student rows were found in that file.",
+        "noHeaders": "No column headings were found. The first row must name the columns.",
+        "corruptFile": "That file couldn't be opened. Re-save it and try again."
+      }
     },
     "errors": {
       "missingName": "Full name is required",
@@ -182,6 +198,9 @@
       "missingEmail": "Email is required for staff",
       "invalidEmail": "Invalid email address",
       "invalidCourse": "Unrecognized course — use B.Pharm, D.Pharm, or M.Pharm",
+      "weakPassword": "Password must be at least 6 characters",
+      "validation": "Some details couldn't be accepted. Check the highlighted fields and try again.",
+      "rateLimited": "You've done that too many times. Please wait a few minutes and try again.",
       "duplicate": "An account with this roll number or email already exists",
       "forbidden": "You do not have permission to do this.",
       "notFound": "That account no longer exists.",
@@ -197,6 +216,7 @@
       "deleteFailed": "Could not delete the account.",
       "cannotDeleteSelf": "You can't delete your own account.",
       "updated": "{name}'s details were updated.",
+      "updatedWithPassword": "{name}'s details were updated and the account is now active. Password: {password} — share it with them now; it will not be shown again.",
       "updateFailed": "Could not save the changes."
     }
   },
@@ -231,6 +251,9 @@
     "toast": {
       "saved": "Attendance saved for {count} students.",
       "empty": "Load students before saving.",
+      "pastDateForbidden": "Only an administrator can record or change attendance for a past date.",
+      "futureDate": "You can't record attendance for a future date.",
+      "validation": "Some of that attendance data couldn't be accepted. Reload the roster and try again.",
       "failed": "Could not save attendance. Please try again."
     },
     "student": {
@@ -302,6 +325,8 @@
     "toast": {
       "posted": "Transaction posted.",
       "invalid": "Please enter a valid amount and category.",
+      "forbidden": "You don't have permission to post fee transactions.",
+      "validation": "Check the amount, date and details, then try again.",
       "failed": "Could not post the transaction."
     },
     "student": {
@@ -363,6 +388,15 @@
       "invalid": "Please fill in the required fields."
     }
   },
+  "forbidden": {
+    "title": "You don't have access to this page",
+    "body": "You're signed in, but this area needs a higher permission level than your account has. If you think that's wrong, ask an administrator to review your role.",
+    "backToDashboard": "Go to my dashboard",
+    "switchAccount": "Sign in as someone else"
+  },
+  "splash": {
+    "loading": "Signing you in…"
+  },
   "login": {
     "title": "Sign in",
     "subtitle": "Access your ICP Portal account",
@@ -381,15 +415,16 @@
     "noAccount": "Don't have an account?",
     "requestAccount": "Request an account",
     "errors": {
-      "invalid": "Invalid credentials. Please try again.",
-      "pending": "Your account is awaiting admin approval.",
-      "rejected": "Your account request was not approved. Please contact support.",
-      "required": "Please fill in all fields."
+      "invalid": "We couldn't sign you in. Check your details and try again — and if you have requested an account, remember you can only sign in once an administrator approves it and sends you a password.",
+      "pending": "Your account is currently awaiting admin approval.",
+      "rejected": "Your account is not active. Please contact support.",
+      "required": "Please fill in all fields.",
+      "rateLimited": "Too many sign-in attempts for this account. Please wait about {minutes} minute(s) and try again."
     }
   },
   "requestAccount": {
     "title": "Request an account",
-    "subtitle": "Request access here. An administrator will review and approve your request before you can sign in.",
+    "subtitle": "Request access here. An administrator will review your request and send you a password once it is approved.",
     "roleQuestion": "What role are you applying for?",
     "typeLabel": "Account type",
     "typeStudent": "Student",
@@ -412,17 +447,14 @@
     "class": "Class",
     "practicalBatch": "Practical batch",
     "selectPlaceholder": "Select…",
-    "password": "Password",
-    "passwordPlaceholder": "At least 6 characters",
-    "confirmPassword": "Confirm password",
-    "confirmPasswordPlaceholder": "Re-enter your password",
+    "credentialNote": "You do not choose a password here. An administrator reviews your request and sends you your sign-in password once it is approved.",
     "optional": "optional",
     "submit": "Submit request",
     "submitting": "Submitting…",
     "backToLogin": "Back to sign in",
     "haveAccount": "Already have an account?",
     "successTitle": "Request submitted",
-    "successBody": "Your account request has been received. You'll be able to sign in once an administrator approves it.",
+    "successBody": "Your account request has been received. An administrator will review it and send you your sign-in password once it is approved.",
     "errors": {
       "invalidRole": "Please choose a valid role to apply for",
       "missingName": "Full name is required",
@@ -430,8 +462,8 @@
       "missingEmail": "Email is required",
       "missingPhone": "Phone number is required",
       "invalidEmail": "Invalid email address",
-      "weakPassword": "Password must be at least 6 characters",
-      "passwordMismatch": "Passwords do not match",
+      "validation": "Some details couldn't be accepted. Check the highlighted fields and try again.",
+      "rateLimited": "Too many requests have been submitted for these details. Please wait about {minutes} minute(s) and try again.",
       "duplicate": "An account with this roll number or email already exists",
       "unknown": "Something went wrong. Please try again."
     }
@@ -456,15 +488,19 @@
     "department": "Department",
     "designation": "Designation",
     "selectPlaceholder": "Select…",
+    "assignPassword": "Password to assign",
+    "assignPasswordPlaceholder": "Leave blank for the default temporary password",
+    "assignPasswordHint": "A request carries no password of its own. Leave this blank to assign Icp@<roll number> for students, or Icp@<email name> for staff. The password is shown once, right after you approve — share it with the applicant.",
     "approve": "Approve",
     "approving": "Approving…",
     "reject": "Reject",
     "rejecting": "Rejecting…",
     "confirmReject": "Reject this account request?",
     "toast": {
-      "approved": "{name}'s account is now active.",
+      "approved": "{name}'s account is now active. Password: {password} — share it with them now; it will not be shown again.",
       "rejected": "Request rejected.",
       "failed": "Could not update the request. Please try again.",
+      "weakPassword": "The password must be at least 6 characters.",
       "duplicate": "That roll number or email clashes with an existing account."
     }
   },

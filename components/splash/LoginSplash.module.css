@@ -1,0 +1,180 @@
+/*
+  Post-login splash — all motion lives here.
+
+  A CSS Module rather than an inline <style> block on purpose: modules are
+  emitted as a real stylesheet file, so they satisfy the Phase 5
+  `style-src 'self'` policy without depending on the 'unsafe-inline' fallback.
+
+  Only `transform` and `opacity` are animated. Both are composited on the GPU,
+  so nothing here triggers layout or paint — the dashboard rendering underneath
+  keeps the main thread to itself.
+
+  Colours come from the brand tokens in globals.css (--primary #4c1d95,
+  --teal #0d9488, --lavender #ede9fe), never raw hex.
+*/
+
+.overlay {
+  position: fixed;
+  inset: 0;
+  /* Above every other layer: drawers are z-40, toasts z-50. */
+  z-index: 100;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  /* Generous gutters so nothing crowds the edge on a 320px phone. */
+  gap: clamp(1.5rem, 5vw, 2.25rem);
+  padding: 1.5rem;
+  background-color: var(--primary);
+  opacity: 1;
+  transition: opacity 400ms cubic-bezier(0.4, 0, 1, 1);
+  will-change: opacity;
+}
+
+/*
+  Exit. ease-IN (accelerating) because the overlay is leaving — and 400ms
+  against the logo's 600ms entrance, so the reveal feels quicker than the
+  arrival rather than dragging.
+*/
+.leaving {
+  opacity: 0;
+  pointer-events: none;
+}
+
+/* ---------------------------------------------------------------- logo -- */
+
+.logo {
+  /* Height-driven so the ~1.9:1 logo keeps its aspect ratio at every size. */
+  height: clamp(3.5rem, 11vw, 5.5rem);
+  width: auto;
+  opacity: 0;
+  transform: scale(0.92);
+  animation: logoEnter 600ms cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+/*
+  Fade + subtle scale-up. 0.92 -> 1 is deliberately restrained: enough to read
+  as "arriving", not enough to feel like a zoom. The curve is an expo-out —
+  fast to settle, no overshoot, so it never reads as bouncy.
+*/
+@keyframes logoEnter {
+  from {
+    opacity: 0;
+    transform: scale(0.92);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+/* ------------------------------------------------------- supporting line -- */
+
+.caption {
+  margin: 0;
+  color: var(--lavender);
+  font-size: clamp(0.8125rem, 2.5vw, 0.9375rem);
+  letter-spacing: 0.02em;
+  text-align: center;
+  text-wrap: balance;
+  opacity: 0;
+  /* Starts once the logo is ~60% settled, so the two reads are sequential. */
+  animation: captionEnter 500ms cubic-bezier(0.16, 1, 0.3, 1) 350ms forwards;
+}
+
+@keyframes captionEnter {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* -------------------------------------------------------- progress bar -- */
+
+.track {
+  position: relative;
+  width: clamp(11rem, 45vw, 16rem);
+  height: 3px;
+  overflow: hidden;
+  border-radius: 999px;
+  /* Faint rail so the unfilled portion is still legible on deep purple. */
+  background-color: rgb(255 255 255 / 0.16);
+}
+
+.fill {
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background-color: var(--teal);
+  transform: scaleX(0);
+  transform-origin: left center;
+  /*
+    scaleX rather than width: width animation forces layout on every frame.
+
+    LINEAR is intentional here and is the one place a linear curve belongs —
+    the bar maps directly to elapsed time, so easing it would misreport
+    progress. Everything else on this screen is eased.
+  */
+  animation:
+    fillProgress 2000ms linear forwards,
+    fillGlow 1600ms ease-in-out infinite alternate;
+}
+
+@keyframes fillProgress {
+  from {
+    transform: scaleX(0);
+  }
+  to {
+    transform: scaleX(1);
+  }
+}
+
+/* Soft pulsing halo. Only box-shadow changes, so no reflow. */
+@keyframes fillGlow {
+  from {
+    box-shadow: 0 0 6px 0 rgb(13 148 136 / 0.5);
+  }
+  to {
+    box-shadow: 0 0 16px 3px rgb(13 148 136 / 0.85);
+  }
+}
+
+/* ------------------------------------------------------ reduced motion -- */
+
+/*
+  globals.css already applies a blanket
+  `animation-duration: 0.01ms !important` to `*` under reduced-motion, which
+  would strip the fade out too and make the splash pop in and out abruptly.
+
+  The brief asks for a SIMPLE FADE, not for no transition at all, so this block
+  re-enables exactly that — and nothing else. `!important` is required only to
+  outrank the global blanket rule; it is not reached for casually.
+
+  Result for a reduced-motion user: no scale, no travel, no progress fill, no
+  pulsing glow. Static logo, static caption, static full-width teal bar, and a
+  gentle opacity fade in and out.
+*/
+@media (prefers-reduced-motion: reduce) {
+  .overlay {
+    /* Keep the crossfade; it is the accessible substitute for the motion. */
+    transition-duration: 300ms !important;
+  }
+
+  .logo,
+  .caption {
+    opacity: 1;
+    transform: none;
+    animation: none !important;
+  }
+
+  .fill {
+    /* Show the bar as a static element rather than an animating one. */
+    transform: scaleX(1);
+    animation: none !important;
+    box-shadow: none;
+  }
+}
