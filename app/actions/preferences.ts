@@ -13,7 +13,9 @@
 //   2. Write ONLY to the caller's own row (id from the verified session, never
 //      from the request payload) — a user can only change their own layout.
 //   3. Run the untrusted payload through sanitizeUsersTableLayout so only
-//      whitelisted column keys can ever be persisted.
+//      whitelisted column keys can ever be persisted. The whitelist is the
+//      built-in set PLUS the custom columns that currently exist in
+//      `user_fields`, loaded here on the server.
 
 import { eq } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
@@ -28,6 +30,8 @@ import {
   type UiPreferences,
   type UsersTableLayout,
 } from "@/lib/table-layout";
+import { customColumnKey } from "@/lib/user-fields";
+import { listUserFields } from "@/lib/user-fields-query";
 
 export type SavePreferencesResult =
   | { ok: true }
@@ -49,7 +53,17 @@ export async function saveUsersTablePreferencesAction(
   const parsed = parseInput(usersTableLayoutSchema, layout);
   if (!parsed.ok) return { ok: false, error: "validation" };
 
-  const clean = sanitizeUsersTableLayout(parsed.data as UsersTableLayout);
+  // The live custom-column list is loaded from the DB, never taken from the
+  // payload — it is what decides which `custom:*` keys are real. A forged key
+  // is dropped here, and a column deleted since this page loaded is dropped too
+  // rather than being persisted back into the layout.
+  const fields = await listUserFields();
+  const customKeys = fields.map((f) => customColumnKey(f.key));
+
+  const clean = sanitizeUsersTableLayout(
+    parsed.data as UsersTableLayout,
+    customKeys,
+  );
   const existing = (user.uiPreferences ?? {}) as UiPreferences;
   const next: UiPreferences = { ...existing, usersTable: clean };
 

@@ -24,6 +24,11 @@ import {
   fieldErrorSuffix,
   type FieldErrors,
 } from "@/lib/validation/client";
+import { setUserFieldValueAction } from "@/app/actions/user-fields";
+import {
+  validateFieldValue,
+  type CustomField,
+} from "@/lib/user-fields";
 import type { ToastKind, UserRow } from "./UsersContent";
 
 // Translation keys per role (mirrors ROLE_LABEL in UsersContent).
@@ -78,6 +83,7 @@ export function EditUserDrawer({
   courseOptions,
   classOptions,
   batchOptions,
+  customFields,
   onClose,
   notify,
 }: {
@@ -87,6 +93,9 @@ export function EditUserDrawer({
   courseOptions: DropdownOptionItem[];
   classOptions: DropdownOptionItem[];
   batchOptions: DropdownOptionItem[];
+  // Admin-defined columns (Phase 9). Editing them here is the only way to fill
+  // one in for an existing account — the import path only covers new ones.
+  customFields: CustomField[];
   onClose: () => void;
   notify: (kind: ToastKind, message: string) => void;
 }) {
@@ -116,6 +125,22 @@ export function EditUserDrawer({
   );
   const [status, setStatus] = useState<UserRow["status"]>(user.status);
 
+  // Custom column values, seeded from the row. Keyed by FIELD key.
+  const [customValues, setCustomValues] = useState<Record<string, string>>(
+    () => ({ ...user.custom }),
+  );
+  const setCustom = (key: string, value: string) =>
+    setCustomValues((prev) => ({ ...prev, [key]: value }));
+
+  // Client-side type check, mirroring validateFieldValue on the server so the
+  // drawer never submits something the action will reject.
+  const customIssue = customFields
+    .map((f) => ({
+      field: f,
+      issue: validateFieldValue(f, customValues[f.key] ?? ""),
+    }))
+    .find((r) => r.issue);
+
   const submit = (e: React.FormEvent) => {
     e.preventDefault();
     setError(null);
@@ -132,6 +157,28 @@ export function EditUserDrawer({
         status,
       });
       if (result.ok) {
+        // Custom column values are separate writes, on purpose: they live in
+        // their own table behind their own action, and one rejected cell must
+        // not roll back the core profile edit the admin actually came here for.
+        // Only CHANGED cells are sent, so a drawer opened and saved untouched
+        // costs nothing.
+        for (const field of customFields) {
+          const next = (customValues[field.key] ?? "").trim();
+          const before = (user.custom[field.key] ?? "").trim();
+          if (next === before) continue;
+          const res = await setUserFieldValueAction({
+            userId: user.id,
+            fieldId: field.id,
+            value: next,
+          });
+          if (!res.ok) {
+            notify(
+              "error",
+              t("onboarding.columns.errSaveValue", { label: field.label }),
+            );
+          }
+        }
+
         // Activating an account that had no credential yet mints a temporary
         // password — show it once so the admin can pass it to the user.
         notify(
@@ -296,6 +343,61 @@ export function EditUserDrawer({
             )}
           </Field>
 
+          {customFields.length > 0 && (
+            <div className="flex flex-col gap-4 border-t border-line pt-4">
+              <p className="text-xs font-semibold uppercase tracking-wide text-muted">
+                {t("onboarding.columns.sectionTitle")}
+              </p>
+              {customFields.map((field) => (
+                <Field
+                  key={field.id}
+                  label={field.label}
+                  htmlFor={`eu-custom-${field.id}`}
+                >
+                  {field.type === "select" ? (
+                    <select
+                      id={`eu-custom-${field.id}`}
+                      value={customValues[field.key] ?? ""}
+                      onChange={(e) => setCustom(field.key, e.target.value)}
+                      className={inputClass}
+                    >
+                      <option value="">
+                        {t("onboarding.create.selectPlaceholder")}
+                      </option>
+                      {(field.options ?? []).map((o) => (
+                        <option key={o} value={o}>
+                          {o}
+                        </option>
+                      ))}
+                    </select>
+                  ) : (
+                    <input
+                      id={`eu-custom-${field.id}`}
+                      type={
+                        field.type === "date"
+                          ? "date"
+                          : field.type === "number"
+                            ? "number"
+                            : "text"
+                      }
+                      value={customValues[field.key] ?? ""}
+                      onChange={(e) => setCustom(field.key, e.target.value)}
+                      className={inputClass}
+                    />
+                  )}
+                </Field>
+              ))}
+            </div>
+          )}
+
+          {customIssue && (
+            <p className="rounded-md border border-danger/40 bg-lavender px-3 py-2 text-sm text-danger">
+              {t(`onboarding.columns.issue.${customIssue.issue}`, {
+                label: customIssue.field.label,
+              })}
+            </p>
+          )}
+
           {error && (
             <p className="rounded-md border border-danger/40 bg-lavender px-3 py-2 text-sm text-danger">
               {t(`onboarding.errors.${error}`)}
@@ -313,7 +415,7 @@ export function EditUserDrawer({
             </button>
             <button
               type="submit"
-              disabled={pending}
+              disabled={pending || !!customIssue}
               className="rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary-hover disabled:opacity-50"
             >
               {pending

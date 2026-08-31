@@ -19,7 +19,14 @@
 //      to persist.
 
 import { sql } from "drizzle-orm";
-import { sqliteTable, text, integer, real } from "drizzle-orm/sqlite-core";
+import {
+  sqliteTable,
+  text,
+  integer,
+  real,
+  index,
+  uniqueIndex,
+} from "drizzle-orm/sqlite-core";
 // Relative (not "@/") import: drizzle-kit parses this file outside Next.js and
 // does not resolve the "@/" path alias. Type-only, so it's erased at runtime.
 import type { UiPreferences } from "../lib/table-layout";
@@ -191,6 +198,82 @@ export const rateLimits = sqliteTable("rate_limits", {
   expiresAt: integer("expires_at").notNull(),
 });
 
+// ===== Dynamic user columns (Phase 9) =====
+//
+// The Users grid lets an admin add their own columns ("Guardian phone",
+// "Hostel block", …). Those columns are DATA, not schema: this is an
+// entity-attribute-value pair of tables, and the `users` table is never altered
+// at runtime. Runtime DDL against a live SQLite file would be a migration with
+// no review, no rollback, and no way to reconcile against drizzle-kit.
+
+/**
+ * One custom column's definition.
+ *
+ * `key` vs `label` is the load-bearing distinction. `key` is slugified from the
+ * label ONCE, at creation, and is then immutable — it is what a saved column
+ * layout (users.ui_preferences) and a saved import mapping reference. `label`
+ * is the display name and is what "rename" edits. Renaming by key instead would
+ * orphan every stored reference to the column.
+ */
+export const userFields = sqliteTable("user_fields", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  key: text("key").notNull().unique(), // immutable machine key
+  label: text("label").notNull(), // mutable display name
+  // A display + validation contract enforced in TS, NOT a storage type — see
+  // the note on `value` below.
+  type: text("type", { enum: ["text", "number", "date", "select"] })
+    .notNull()
+    .default("text"),
+  // Permitted values when type = 'select'; null for every other type.
+  options: text("options", { mode: "json" }).$type<string[]>(),
+  sortOrder: integer("sort_order").notNull().default(0),
+  // Reserved for a future "archive without destroying" flow. The current
+  // delete action is a real hard delete (that is what the UI warns about), but
+  // every read filters on this so archiving can be added without touching them.
+  isActive: integer("is_active", { mode: "boolean" }).notNull().default(true),
+  createdBy: integer("created_by").references(() => users.id),
+  createdAt: integer("created_at", { mode: "timestamp" })
+    .notNull()
+    .default(sql`(unixepoch())`),
+  updatedAt: integer("updated_at", { mode: "timestamp" })
+    .notNull()
+    .default(sql`(unixepoch())`),
+});
+
+/**
+ * One user's value for one custom column.
+ *
+ * `value` is TEXT for every field type, including number and date. SQLite is
+ * dynamically typed and a single narrow column keeps this table to one row per
+ * (user, field); the declared `type` is what validates and renders it. The bill
+ * this defers: sorting a numeric column would need CAST(value AS REAL). There is
+ * no column sorting in the grid today, so nothing regresses.
+ *
+ * The UNIQUE(user_id, field_id) index makes every write a deterministic upsert;
+ * an absent row simply means "no value", so adding a column costs zero rows.
+ * The field_id index makes deleting a column a single indexed sweep.
+ */
+export const userFieldValues = sqliteTable(
+  "user_field_values",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    userId: integer("user_id")
+      .notNull()
+      .references(() => users.id),
+    fieldId: integer("field_id")
+      .notNull()
+      .references(() => userFields.id),
+    value: text("value"),
+    updatedAt: integer("updated_at", { mode: "timestamp" })
+      .notNull()
+      .default(sql`(unixepoch())`),
+  },
+  (t) => [
+    uniqueIndex("user_field_values_user_field_uq").on(t.userId, t.fieldId),
+    index("user_field_values_field_idx").on(t.fieldId),
+  ],
+);
+
 // ---------- Inferred types ----------
 export type User = typeof users.$inferSelect;
 export type NewUser = typeof users.$inferInsert;
@@ -199,3 +282,6 @@ export type FeeLedger = typeof feeLedgers.$inferSelect;
 export type SupportTicket = typeof supportTickets.$inferSelect;
 export type DropdownOption = typeof dropdownOptions.$inferSelect;
 export type RateLimit = typeof rateLimits.$inferSelect;
+export type UserField = typeof userFields.$inferSelect;
+export type NewUserField = typeof userFields.$inferInsert;
+export type UserFieldValue = typeof userFieldValues.$inferSelect;

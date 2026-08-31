@@ -14,11 +14,16 @@ import {
   sanitizeUsersTableLayout,
   type UiPreferences,
 } from "@/lib/table-layout";
+import { customColumnKey } from "@/lib/user-fields";
+import {
+  listUserFields,
+  loadUserFieldValues,
+} from "@/lib/user-fields-query";
 import { UsersContent } from "./UsersContent";
 
 export default async function UsersPage() {
   const me = await requireCapability("manageUsers");
-  const [rows, courseOpts, classOpts, batchOpts] = await Promise.all([
+  const [rows, courseOpts, classOpts, batchOpts, customFields] = await Promise.all([
     db
       .select({
         id: users.id,
@@ -38,7 +43,21 @@ export default async function UsersPage() {
     getDropdownOptions("course"),
     getDropdownOptions("class"),
     getDropdownOptions("practical_batch"),
+    listUserFields(),
   ]);
+
+  // Custom column values for the whole page in ONE query, then attached to each
+  // row. Per-row queries would be a few hundred round trips for data that fits
+  // in a single narrow result set.
+  const valuesByUser =
+    customFields.length > 0
+      ? await loadUserFieldValues(rows.map((r) => r.id))
+      : new Map<number, Record<string, string>>();
+
+  const userRows = rows.map((r) => ({
+    ...r,
+    custom: valuesByUser.get(r.id) ?? {},
+  }));
 
   const toItems = (opts: { id: number; value: string; label: string }[]) =>
     opts.map((o) => ({ id: o.id, value: o.value, label: o.label }));
@@ -46,17 +65,26 @@ export default async function UsersPage() {
   // Initialize the grid from the admin's saved layout (falls back to the full
   // default set when they've never customized it). Sanitized so a stale blob
   // that predates a column change can never break rendering.
+  // The custom-column keys are passed in as the second whitelist argument, so a
+  // saved layout can carry admin-defined columns and a layout naming a DELETED
+  // column self-heals here rather than needing a cleanup migration.
   const savedLayout = sanitizeUsersTableLayout(
     (me.uiPreferences as UiPreferences | null)?.usersTable,
+    customFields.map((f) => customColumnKey(f.key)),
   );
 
   return (
     <UsersContent
-      users={rows}
+      users={userRows}
+      customFields={customFields}
       courseOptions={toItems(courseOpts)}
       classOptions={toItems(classOpts)}
       batchOptions={toItems(batchOpts)}
       canDelete={can(me.role as Role, "deleteUsers")}
+      // Adding / renaming / dropping a column is a CONFIGURATION change, so it
+      // sits behind `settings` (admin only) rather than manageUsers. The server
+      // actions re-check the same capability.
+      canManageColumns={can(me.role as Role, "settings")}
       canEditStudents={can(me.role as Role, "manageUsers")}
       // Direct account creation (drawer + CSV) is admin-only. This merely hides
       // the buttons; createUserAction / bulkImportStudentsAction re-check it.

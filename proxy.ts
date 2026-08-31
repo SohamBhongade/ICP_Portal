@@ -109,6 +109,14 @@ function isPublicPath(pathname: string): boolean {
     pathname === "/403" ||
     pathname === "/style-guide" ||
     pathname === "/request-account" ||
+    // Logging out must NEVER depend on being logged in. Gating this behind the
+    // auth check turns an unauthenticated POST into a 307 to /login, which
+    // fetch() follows silently: the caller sees a 200 and believes the cookie
+    // was cleared when it was not. Signing out is idempotent and harmless for
+    // an anonymous caller, so it is public. (It still receives the CSP, the
+    // rate limit and the cross-origin CSRF check above, and the handler itself
+    // re-checks the origin.)
+    pathname === "/api/auth/logout" ||
     pathname.startsWith("/request-account/") ||
     pathname.startsWith("/style-guide/")
   );

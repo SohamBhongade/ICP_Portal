@@ -120,3 +120,44 @@
     }
   }
 }
+
+/*
+  Frozen-column data grid (Admin > Users, Phase 8).
+
+  The edge treatment lives in CSS rather than in JSX so that toggling it during
+  horizontal scroll does not touch React props: the scroll container flips a
+  `data-edge-*` attribute and the frozen cells react to it via a descendant
+  selector, which keeps every memoized row from re-rendering on scroll.
+
+  A hairline border marks the frozen boundary at all times (so the split never
+  reads as a rendering artifact); the soft purple drop shadow layers on top only
+  while there is actually content scrolled beneath the rail.
+*/
+@layer components {
+  .dt-pin-left-edge {
+    border-right: 1px solid var(--line);
+  }
+
+  .dt-pin-right-edge {
+    border-left: 1px solid var(--line);
+  }
+
+  /* The frozen cells also carry Tailwind's `transition-colors` for the row
+     hover, which would otherwise win the cascade and leave the shadow snapping
+     on. The `[data-edge-*] .class` form outranks a single utility class, so
+     both properties ease together. */
+  [data-edge-left] .dt-pin-left-edge,
+  [data-edge-right] .dt-pin-right-edge {
+    transition-property: box-shadow, background-color;
+    transition-duration: 150ms;
+    transition-timing-function: ease-out;
+  }
+
+  [data-edge-left="true"] .dt-pin-left-edge {
+    box-shadow: 8px 0 12px -8px rgb(76 29 149 / 0.35);
+  }
+
+  [data-edge-right="true"] .dt-pin-right-edge {
+    box-shadow: -8px 0 12px -8px rgb(76 29 149 / 0.35);
+  }
+}

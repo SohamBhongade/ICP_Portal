@@ -96,7 +96,44 @@
       "saving": "Saving…",
       "needOne": "Keep at least one column visible.",
       "saved": "Column layout saved.",
-      "saveFailed": "Couldn't save your layout. Please try again."
+      "saveFailed": "Couldn't save your layout. Please try again.",
+      "addColumn": "Add column",
+      "customBadge": "Custom column - {type}",
+      "protected": "Core column - cannot be deleted",
+      "rename": "Rename",
+      "renameHint": "Only the display name changes. Saved layouts and import mappings keep working.",
+      "renamed": "Column renamed to {label}.",
+      "created": "Column {label} added.",
+      "newLabel": "Column name",
+      "newLabelPlaceholder": "e.g. Guardian phone",
+      "newType": "Value type",
+      "newOptions": "Choices",
+      "newOptionsPlaceholder": "One per line, or comma separated",
+      "needOptions": "Add at least one choice for a Choice column.",
+      "deleteColumn": "Delete column",
+      "deleteTitle": "Delete the {label} column?",
+      "deleteBody": "Every value stored in {label}, for every user, will be permanently deleted along with the column. This cannot be undone.",
+      "deleteConfirmLabel": "Type {label} to confirm",
+      "deleteConfirm": "Delete column",
+      "deleted": "Column {label} deleted, along with {count} stored value(s).",
+      "limitReached": "You can have at most {max} custom columns.",
+      "errDuplicate": "A column with that name already exists.",
+      "errBadLabel": "That name has no usable characters. Use letters or numbers.",
+      "errBadValue": "That value does not match the column type.",
+      "type": {
+        "text": "Text",
+        "number": "Number",
+        "date": "Date",
+        "select": "Choice"
+      },
+      "sectionTitle": "Custom columns",
+      "errSaveValue": "Could not save the {label} value.",
+      "issue": {
+        "tooLong": "{label} is too long.",
+        "notNumber": "{label} must be a number.",
+        "notDate": "{label} must be a valid date (YYYY-MM-DD).",
+        "notAnOption": "{label} must be one of its listed choices."
+      }
     },
     "edit": "Edit",
     "editUser": {
@@ -177,7 +214,8 @@
         "noRows": "No student rows were found in that file.",
         "noHeaders": "No column headings were found. The first row must name the columns.",
         "corruptFile": "That file couldn't be opened. Re-save it and try again."
-      }
+      },
+      "customTag": "Custom"
     },
     "errors": {
       "missingName": "Full name is required",
@@ -205,6 +243,24 @@
       "updated": "{name}'s details were updated.",
       "updatedWithPassword": "{name}'s details were updated and the account is now active. Password: {password} — share it with them now; it will not be shown again.",
       "updateFailed": "Could not save the changes."
+    },
+    "tableRegion": "Users table. Use arrow keys to scroll.",
+    "noResultsHint": "Try clearing a filter or shortening your search.",
+    "emptyTitle": "No users yet",
+    "emptyHint": "Add a user or import a CSV to get started.",
+    "bulk": {
+      "selectRow": "Select this user",
+      "selectAllFiltered": "Select all {count} filtered",
+      "selectedCount": "{count} of {total} filtered users selected",
+      "clear": "Clear selection",
+      "scopeNote": "Applies only to the {count} filtered results",
+      "deleteSelected": "Delete {count}",
+      "confirmTitle": "Delete {count} accounts?",
+      "confirmBody": "This permanently removes {count} accounts along with every support ticket, fee ledger entry, attendance record and custom column value belonging to them.",
+      "irreversible": "This cannot be undone.",
+      "typeCount": "Type {count} to confirm",
+      "deleted": "Deleted {count} accounts.",
+      "deletedWithErrors": "Deleted {count} accounts; {failed} could not be deleted ({names})."
     }
   },
   "attendance": {
@@ -301,13 +357,15 @@
     },
     "cat": {
       "tuition": "Tuition fee",
-      "library": "Library fee",
-      "development": "Development fees",
-      "otherCharge": "Other charge",
+      "library": "Library Fees",
+      "development": "Development Fees",
+      "otherCharge": "Other Fees",
       "cash": "Cash payment",
       "online": "Online payment",
-      "scholarship": "Scholarship (fund)",
-      "otherPayment": "Other payment"
+      "scholarship": "Scholarship (Tuition Fee)",
+      "otherPayment": "Other payment",
+      "libraryPayment": "Library Fees",
+      "developmentPayment": "Development Fees"
     },
     "toast": {
       "posted": "Transaction posted.",

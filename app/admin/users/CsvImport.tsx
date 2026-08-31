@@ -31,10 +31,11 @@ import {
   type TargetField,
 } from "@/app/actions/import";
 import { extractYear, normalizeCourse, resolveCourse } from "@/lib/courses";
+import { customColumnKey, type CustomField } from "@/lib/user-fields";
 import type { ToastKind } from "./UsersContent";
 
 /** Row shape after the operator's column mapping is applied (preview only). */
-type MappedRow = Partial<Record<TargetField, string>>;
+type MappedRow = Partial<Record<string, string>>;
 
 /** Preview-only validation codes; the server owns the authoritative ones. */
 type PreviewIssue =
@@ -43,14 +44,21 @@ type PreviewIssue =
   | "invalidEmail"
   | "invalidCourse";
 
-// Portal fields in display order. `required` drives mandatory-field validation;
-// `guesses` are substrings used to auto-match a CSV header to this field.
-const FIELDS: {
+// A mapping target as the UI renders it. Built-ins carry an i18n key; custom
+// columns (Phase 9) carry the admin's own label verbatim.
+type MapTarget = {
   key: TargetField;
-  labelKey: string;
+  /** i18n key for a built-in; null for a custom column. */
+  labelKey: string | null;
+  /** Literal label for a custom column; null for a built-in. */
+  label?: string;
   required: boolean;
   guesses: string[];
-}[] = [
+};
+
+// Portal fields in display order. `required` drives mandatory-field validation;
+// `guesses` are substrings used to auto-match a CSV header to this field.
+const FIELDS: MapTarget[] = [
   { key: "fullName", labelKey: "onboarding.csv.fieldFullName", required: true, guesses: ["fullname", "name", "studentname"] },
   { key: "studentId", labelKey: "onboarding.csv.fieldRollNo", required: true, guesses: ["roll", "rollno", "rollnumber", "studentid", "id"] },
   { key: "email", labelKey: "onboarding.csv.fieldEmail", required: false, guesses: ["email", "mail"] },
@@ -63,14 +71,36 @@ const FIELDS: {
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 type RawRow = Record<string, string>;
-type Mapping = Partial<Record<TargetField, string>>;
+type Mapping = Partial<Record<string, string>>;
 
 const norm = (s: string) => s.toLowerCase().replace(/[^a-z0-9]/g, "");
 
-function guessMapping(headers: string[]): Mapping {
+/**
+ * Every mapping target: the built-in fields, then one per live custom column.
+ *
+ * Custom targets are addressed by the SAME `custom:<key>` string the server
+ * whitelists on import, so what the operator picks here is exactly what the
+ * server validates — there is no translation step in between to get wrong.
+ * The auto-guess for a custom column matches its own label, which is usually
+ * what the spreadsheet header says too.
+ */
+function buildTargets(customFields: CustomField[]): MapTarget[] {
+  return [
+    ...FIELDS,
+    ...customFields.map((f) => ({
+      key: customColumnKey(f.key) as TargetField,
+      labelKey: null,
+      label: f.label,
+      required: false,
+      guesses: [norm(f.label), norm(f.key)].filter(Boolean),
+    })),
+  ];
+}
+
+function guessMapping(headers: string[], targets: MapTarget[]): Mapping {
   const map: Mapping = {};
   const used = new Set<string>();
-  for (const field of FIELDS) {
+  for (const field of targets) {
     const hit = headers.find(
       (h) => !used.has(h) && field.guesses.some((g) => norm(h).includes(g)),
     );
@@ -101,7 +131,11 @@ export function CsvImport({
   const [headers, setHeaders] = useState<string[]>([]);
   const [rows, setRows] = useState<RawRow[]>([]);
   const [mapping, setMapping] = useState<Mapping>({});
+  const [customFields, setCustomFields] = useState<CustomField[]>([]);
   const [dragging, setDragging] = useState(false);
+
+  // Built-ins plus whatever custom columns exist right now.
+  const targets = useMemo(() => buildTargets(customFields), [customFields]);
 
   // Upload for parsing. The server decides whether the file is acceptable and
   // what it contains; this component only renders the answer.
@@ -118,7 +152,8 @@ export function CsvImport({
       setFileName(file.name);
       setHeaders(res.headers);
       setRows(res.rows);
-      setMapping(guessMapping(res.headers));
+      setCustomFields(res.customFields);
+      setMapping(guessMapping(res.headers, buildTargets(res.customFields)));
     });
   };
 
@@ -140,11 +175,11 @@ export function CsvImport({
   // Map each raw row to our schema shape using the current column mapping.
   const mapped: MappedRow[] = useMemo(() => {
     return rows.map((r) => {
-      const get = (k: TargetField) => {
+      const get = (k: string) => {
         const h = mapping[k];
         return h ? (r[h] ?? "").trim() : "";
       };
-      return {
+      const out: MappedRow = {
         fullName: get("fullName"),
         studentId: get("studentId"),
         email: get("email") || undefined,
@@ -153,8 +188,15 @@ export function CsvImport({
         className: get("className") || undefined,
         practicalBatch: get("practicalBatch") || undefined,
       };
+      // Custom columns ride along under their `custom:<key>` target so the
+      // preview and the server see the identical shape.
+      for (const f of customFields) {
+        const key = customColumnKey(f.key);
+        out[key] = get(key) || undefined;
+      }
+      return out;
     });
-  }, [rows, mapping]);
+  }, [rows, mapping, customFields]);
 
   // Per-row client validation -> error code (or null = ready). Mirrors the
   // authoritative server checks so the preview never disagrees with the import.
@@ -324,12 +366,19 @@ export function CsvImport({
                   {t("onboarding.csv.mapHint")}
                 </p>
                 <div className="grid gap-3 sm:grid-cols-2">
-                  {FIELDS.map((field) => (
+                  {targets.map((field) => (
                     <label key={field.key} className="block">
                       <span className="mb-1 block text-xs font-medium text-ink">
-                        {t(field.labelKey)}
+                        {field.labelKey ? t(field.labelKey) : field.label}
                         {field.required && (
                           <span className="text-danger"> *</span>
+                        )}
+                        {/* Custom columns are marked so the operator can tell
+                            them apart from the built-in roster fields. */}
+                        {!field.labelKey && (
+                          <span className="ml-1 rounded bg-lavender px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-primary">
+                            {t("onboarding.csv.customTag")}
+                          </span>
                         )}
                       </span>
                       <select

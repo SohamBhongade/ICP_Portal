@@ -9,6 +9,7 @@ import Link from "next/link";
 import Image from "next/image";
 import { Eye, EyeOff } from "lucide-react";
 import { useT } from "@/components/i18n/LanguageProvider";
+import { markTabSession } from "@/components/auth/SessionTabGuard";
 import { loginAction, type LoginState } from "@/app/actions/auth";
 
 const initialState: LoginState = { error: null };
@@ -104,7 +105,30 @@ export default function LoginPage() {
             ))}
           </div>
 
-          <form action={formAction} className="mt-5 space-y-4">
+          {/*
+            PER-TAB SESSION MARKER (see components/auth/SessionTabGuard.tsx).
+
+            Written here, synchronously in onSubmit, rather than in a `.then()`
+            on the action. loginAction ends in a SERVER-side redirect("/dashboard")
+            — redirect() throws, so the action never resolves on success and
+            there is no client callback to hang this off. onSubmit runs in the
+            same synchronous event, strictly BEFORE the action is dispatched and
+            therefore strictly before the redirect: the ordering is guaranteed by
+            construction rather than by a race.
+
+            It is deliberately NOT gated on the login succeeding. The marker only
+            asserts "a person opened and used this tab in this browsing session",
+            which is equally true of a failed attempt, and it grants nothing on
+            its own — with no session cookie the guard never even runs.
+
+            No preventDefault and no return value, so React proceeds to the form
+            action exactly as before.
+          */}
+          <form
+            action={formAction}
+            onSubmit={markTabSession}
+            className="mt-5 space-y-4"
+          >
             <input type="hidden" name="mode" value={mode} />
             <input type="hidden" name="locale" value="en" />
 

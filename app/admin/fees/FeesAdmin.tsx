@@ -27,7 +27,10 @@ import {
   type LedgerStudent,
 } from "@/app/actions/fees";
 import {
+  PARTICULARS_SEPARATOR,
   balanceToneClass,
+  feeCategoriesFor,
+  feeParticularsLabel,
   formatCurrency,
   type LedgerRow,
   type LedgerType,
@@ -271,7 +274,11 @@ function LedgerTable({ rows }: { rows: LedgerRow[] }) {
               <td className="whitespace-nowrap px-4 py-3 text-muted tabular-nums">
                 {row.date}
               </td>
-              <td className="px-4 py-3 text-ink">{row.particulars}</td>
+              {/* Mapped, not raw: renaming a category must show up on rows
+                  posted before the rename too, without touching stored data. */}
+              <td className="px-4 py-3 text-ink">
+                {feeParticularsLabel(row.particulars, t)}
+              </td>
               <td className="px-4 py-3 text-muted">{row.receiptNo ?? "—"}</td>
               <td className="px-4 py-3 text-right tabular-nums text-danger">
                 {row.type === "charge" ? formatCurrency(row.amount) : "—"}
@@ -292,18 +299,11 @@ function LedgerTable({ rows }: { rows: LedgerRow[] }) {
   );
 }
 
-const CHARGE_OPTS = [
-  { value: "Tuition fee", key: "fees.cat.tuition" },
-  { value: "Library fee", key: "fees.cat.library" },
-  { value: "Development fees", key: "fees.cat.development" },
-  { value: "Other charge", key: "fees.cat.otherCharge" },
-];
-const PAYMENT_OPTS = [
-  { value: "Cash payment", key: "fees.cat.cash" },
-  { value: "Online payment", key: "fees.cat.online" },
-  { value: "Scholarship (fund)", key: "fees.cat.scholarship" },
-  { value: "Other payment", key: "fees.cat.otherPayment" },
-];
+// Sourced from lib/fees.ts rather than declared here, so the admin form, the
+// admin ledger and the student ledger can never disagree about what a stored
+// value means. Adding a category is now a one-line edit in that table.
+const CHARGE_OPTS = feeCategoriesFor("charge");
+const PAYMENT_OPTS = feeCategoriesFor("payment");
 
 function PostTransactionModal({
   student,
@@ -341,7 +341,12 @@ function PostTransactionModal({
       return;
     }
     const note = remarks.trim();
-    const particulars = note ? `${category} — ${note}` : category;
+    // The stored value is the category's IDENTIFIER, never its display label —
+    // see the note on FEE_CATEGORIES. The separator is shared with the reader
+    // (feeParticularsLabel) so the two can never drift apart.
+    const particulars = note
+      ? `${category}${PARTICULARS_SEPARATOR}${note}`
+      : category;
 
     startTransition(async () => {
       const result = await postFeeTransactionAction({
@@ -437,7 +442,7 @@ function PostTransactionModal({
             >
               {opts.map((o) => (
                 <option key={o.value} value={o.value}>
-                  {t(o.key)}
+                  {t(o.labelKey)}
                 </option>
               ))}
             </select>

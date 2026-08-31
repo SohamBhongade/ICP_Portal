@@ -24,6 +24,7 @@ import {
   moneyAmount,
   optionalEmail,
   optionalText,
+  requiredSafeText,
   requiredText,
   roleEnum,
   safeText,
@@ -32,6 +33,19 @@ import {
   userStatusEnum,
   z,
 } from "./core";
+import {
+  USER_FIELD_LIMITS,
+  USER_FIELD_TYPES,
+} from "../user-fields";
+
+/**
+ * Accounts one bulk-delete call may address.
+ *
+ * Not a rate limit — that is RULES.bulkDeleteUsers — but a per-call ceiling, so
+ * a single forged request can never enqueue an unbounded cascade. A registrar
+ * clearing a graduated cohort works in filtered batches well under this.
+ */
+export const BULK_DELETE_MAX = 100;
 
 // ---------------------------------------------------------------------------
 // auth.ts
@@ -152,6 +166,48 @@ export const updateUserSchema = z.strictObject({
 });
 
 export const idSchema = dbId;
+
+/**
+ * bulkDeleteUsersAction — the id list.
+ *
+ * Bounded at BULK_DELETE_MAX so one call can never be handed an unbounded array
+ * (the action would otherwise loop over it before any per-user check runs), and
+ * deduped so a payload repeating the same id 100 times counts as one account
+ * against the cap.
+ */
+export const bulkDeleteUsersSchema = z
+  .array(dbId)
+  .min(1)
+  .max(BULK_DELETE_MAX)
+  .transform((ids) => Array.from(new Set(ids)));
+
+// ---------------------------------------------------------------------------
+// user-fields.ts — admin-defined columns on the Users grid
+// ---------------------------------------------------------------------------
+
+/** createUserFieldAction. The KEY is derived server-side from the label and is
+ *  deliberately NOT part of this payload — a caller must not choose it. */
+export const createUserFieldSchema = z.strictObject({
+  label: requiredSafeText(USER_FIELD_LIMITS.maxLabel),
+  type: z.enum(USER_FIELD_TYPES),
+  options: z
+    .array(requiredSafeText(USER_FIELD_LIMITS.maxOptionLength))
+    .max(USER_FIELD_LIMITS.maxOptions)
+    .optional(),
+});
+
+/** renameUserFieldAction — label only. The key is immutable by design. */
+export const renameUserFieldSchema = z.strictObject({
+  id: dbId,
+  label: requiredSafeText(USER_FIELD_LIMITS.maxLabel),
+});
+
+/** setUserFieldValueAction — one cell. */
+export const setUserFieldValueSchema = z.strictObject({
+  userId: dbId,
+  fieldId: dbId,
+  value: safeText(USER_FIELD_LIMITS.maxValue),
+});
 
 // ---------------------------------------------------------------------------
 // preferences.ts

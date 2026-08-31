@@ -28,7 +28,7 @@
 import bcrypt from "bcryptjs";
 import { revalidatePath } from "next/cache";
 import { db } from "@/db";
-import { users } from "@/db/schema";
+import { userFieldValues, users } from "@/db/schema";
 import { currentUserWithCapability } from "@/lib/auth";
 import { extractYear, normalizeCourse, resolveCourse } from "@/lib/courses";
 import { logServerError } from "@/lib/errors";
@@ -40,8 +40,14 @@ import {
   type ParsedSheet,
 } from "@/lib/import/parse";
 import { z, parseInput, LIMITS } from "@/lib/validation/core";
+import {
+  customColumnKey,
+  validateFieldValue,
+  type CustomField,
+} from "@/lib/user-fields";
+import { listUserFields } from "@/lib/user-fields-query";
 
-/** Fields a roster column can be mapped onto. Mirrors the client's FIELDS. */
+/** Built-in fields a roster column can be mapped onto. Mirrors the client's FIELDS. */
 const TARGET_FIELDS = [
   "fullName",
   "studentId",
@@ -51,19 +57,63 @@ const TARGET_FIELDS = [
   "className",
   "practicalBatch",
 ] as const;
-export type TargetField = (typeof TARGET_FIELDS)[number];
+export type BuiltInTargetField = (typeof TARGET_FIELDS)[number];
 
-/** Chosen mapping: target field -> source column header. Strict, bounded. */
-const mappingSchema = z.strictObject(
-  Object.fromEntries(
-    TARGET_FIELDS.map((f) => [
-      f,
-      z.string().trim().min(1).max(LIMITS.shortText).optional(),
-    ]),
-  ) as Record<TargetField, z.ZodOptional<z.ZodString>>,
-);
+/**
+ * A mapping target: a built-in field, or `custom:<field key>` for an
+ * admin-defined column (Phase 9). Custom targets are validated against the LIVE
+ * `user_fields` list loaded on the server — the mapping arrives from the
+ * browser, so a `custom:` key it names is a claim, not a fact.
+ */
+export type TargetField = BuiltInTargetField | (string & {});
+
+const BUILT_IN_TARGETS = new Set<string>(TARGET_FIELDS);
+
+/**
+ * Chosen mapping: target field -> source column header.
+ *
+ * A record rather than a strict object, because the permitted key set is no
+ * longer static. Both sides are bounded here (key length, value length, total
+ * entries) and the keys themselves are whitelisted in `resolveMapping` below
+ * against the built-ins plus the custom columns that actually exist.
+ */
+const mappingSchema = z
+  .record(
+    z.string().trim().min(1).max(LIMITS.shortText),
+    z.string().trim().min(1).max(LIMITS.shortText),
+  )
+  .refine((m) => Object.keys(m).length <= 128, "Too many mapped columns");
 
 export type ImportMapping = Partial<Record<TargetField, string>>;
+
+/**
+ * Reject any mapping key that is neither a built-in field nor a live custom
+ * column. Returns the filtered mapping plus the custom fields it references, so
+ * the insert loop can validate each value against its declared type.
+ */
+function resolveMapping(
+  raw: Record<string, string>,
+  fields: CustomField[],
+): { mapping: ImportMapping; customTargets: CustomField[] } {
+  const byColumnKey = new Map(fields.map((f) => [customColumnKey(f.key), f]));
+  const mapping: ImportMapping = {};
+  const customTargets: CustomField[] = [];
+
+  for (const [target, header] of Object.entries(raw)) {
+    if (BUILT_IN_TARGETS.has(target)) {
+      mapping[target as BuiltInTargetField] = header;
+      continue;
+    }
+    const field = byColumnKey.get(target);
+    if (field) {
+      mapping[target] = header;
+      customTargets.push(field);
+    }
+    // Anything else is silently dropped: an unknown target is a stale or forged
+    // key, and refusing the whole import over one would strand the operator.
+  }
+  return { mapping, customTargets };
+}
 
 export type ImportError =
   | "forbidden"
@@ -77,6 +127,8 @@ export type PreviewResult =
       ok: true;
       headers: string[];
       rows: Record<string, string>[];
+      /** Live custom columns, offered as additional mapping targets. */
+      customFields: CustomField[];
       limits: { maxRows: number; maxCellLength: number; maxFileBytes: number };
     }
   | { ok: false; error: ImportError; retryAfter?: number };
@@ -132,6 +184,9 @@ export async function parseImportFileAction(
     ok: true,
     headers: parsed.sheet.headers,
     rows: parsed.sheet.rows,
+    // Sent with the preview so the mapping UI can offer custom columns without
+    // a second round trip. Authoritative either way: the import re-loads them.
+    customFields: await listUserFields(),
     limits: {
       maxRows: IMPORT_LIMITS.maxRows,
       maxCellLength: IMPORT_LIMITS.maxCellLength,
@@ -140,15 +195,26 @@ export async function parseImportFileAction(
   };
 }
 
-/** Apply the operator's column mapping to one sanitized sheet row. */
+/**
+ * Apply the operator's column mapping to one sanitized sheet row.
+ *
+ * Returns the built-in fields under their own names and every mapped custom
+ * column under its `custom:<key>` target, so the insert loop can split them
+ * without re-consulting the mapping.
+ */
 function applyMapping(
   row: Record<string, string>,
   mapping: ImportMapping,
-): Record<TargetField, string | undefined> {
-  const out = {} as Record<TargetField, string | undefined>;
+): Record<string, string | undefined> {
+  const out: Record<string, string | undefined> = {};
+  for (const target of Object.keys(mapping)) {
+    const header = mapping[target];
+    out[target] = header ? (row[header] ?? "") || undefined : undefined;
+  }
+  // Built-ins are always present as keys (possibly undefined) so the checks
+  // below read the same whether or not the operator mapped them.
   for (const field of TARGET_FIELDS) {
-    const header = mapping[field];
-    out[field] = header ? (row[header] ?? "") || undefined : undefined;
+    if (!(field in out)) out[field] = undefined;
   }
   return out;
 }
@@ -181,19 +247,35 @@ export async function importStudentsFileAction(
   }
   const mappingParsed = parseInput(mappingSchema, rawMapping);
   if (!mappingParsed.ok) return { ok: false, error: "badMapping" };
-  const mapping = mappingParsed.data as ImportMapping;
+
+  // WHITELIST THE TARGETS. The custom-column list is re-loaded from the DB here,
+  // not carried over from the preview — a `custom:` key the browser sent is a
+  // claim about what columns exist, and only the database gets to answer that.
+  const fields = await listUserFields();
+  const { mapping, customTargets } = resolveMapping(
+    mappingParsed.data as Record<string, string>,
+    fields,
+  );
 
   // RE-PARSE. The preview's rows went through the client and are not trusted.
   const parsed = await parseImportFile(file);
   if (!parsed.ok) return { ok: false, error: parsed.reason };
 
-  return insertRows(parsed.sheet, mapping, actor.id);
+  return insertRows(parsed.sheet, mapping, customTargets, actor.id);
 }
 
-/** Shared insert loop. Business rules are unchanged from the previous flow. */
+/**
+ * Shared insert loop. Business rules for the built-in fields are unchanged.
+ *
+ * Custom column values are written AFTER the user row, keyed by the id the
+ * insert returned. A value that fails its column's type check is skipped and
+ * the row is still counted as created — a malformed "Guardian phone" must not
+ * cost the student their account, and the operator sees the column blank.
+ */
 async function insertRows(
   sheet: ParsedSheet,
   mapping: ImportMapping,
+  customTargets: CustomField[],
   actorId: number,
 ): Promise<ImportResult> {
   let created = 0;
@@ -248,8 +330,12 @@ async function insertRows(
         .onConflictDoNothing()
         .returning({ id: users.id });
 
-      if (res.length === 0) failed.push({ row: rowNo, reason: "duplicate" });
-      else created++;
+      if (res.length === 0) {
+        failed.push({ row: rowNo, reason: "duplicate" });
+      } else {
+        created++;
+        await writeCustomValues(res[0].id, r, customTargets);
+      }
     } catch (err) {
       logServerError("importStudentsFileAction", err, {
         row: rowNo,
@@ -261,4 +347,36 @@ async function insertRows(
 
   if (created > 0) revalidatePath("/admin/users");
   return { ok: true, created, failed };
+}
+
+/**
+ * Persist the mapped custom-column values for one freshly created user.
+ *
+ * Each value is validated against its column's declared type (a `select` column
+ * only ever stores one of its own options). Blank and invalid values are simply
+ * not written — absent and blank mean the same thing to every reader, so the
+ * table stays proportional to real data rather than to users x fields.
+ */
+async function writeCustomValues(
+  userId: number,
+  row: Record<string, string | undefined>,
+  customTargets: CustomField[],
+): Promise<void> {
+  const rows: { userId: number; fieldId: number; value: string }[] = [];
+
+  for (const field of customTargets) {
+    const value = (row[customColumnKey(field.key)] ?? "").trim();
+    if (!value) continue;
+    if (validateFieldValue(field, value)) continue; // type mismatch -> skip
+    rows.push({ userId, fieldId: field.id, value });
+  }
+
+  if (rows.length === 0) return;
+  try {
+    await db.insert(userFieldValues).values(rows).onConflictDoNothing();
+  } catch (err) {
+    // Never fail the import over a custom column — the account is already
+    // created and correct; the extra column is simply left blank.
+    logServerError("importStudentsFileAction.customValues", err, { userId });
+  }
 }

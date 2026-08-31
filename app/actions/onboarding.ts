@@ -23,13 +23,14 @@
 //     "duplicate" error rather than throwing.
 
 import bcrypt from "bcryptjs";
-import { and, eq, or } from "drizzle-orm";
+import { and, eq, inArray, or } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import { db } from "@/db";
 import {
   attendanceLogs,
   feeLedgers,
   supportTickets,
+  userFieldValues,
   users,
 } from "@/db/schema";
 import { currentUserWithCapability } from "@/lib/auth";
@@ -40,6 +41,7 @@ import { RULES, checkRateLimit } from "@/lib/rate-limit";
 import { parseInput, type FieldErrors } from "@/lib/validation/core";
 import {
   approveRequestSchema,
+  bulkDeleteUsersSchema,
   createUserSchema,
   idSchema,
   updateUserSchema,
@@ -585,9 +587,14 @@ export async function deleteUserAction(
         ),
       );
 
-    // 4. text_overrides has no user FK — nothing to delete.
+    // 4. Custom column values (Phase 9) — a value row must never outlive its user.
+    await db
+      .delete(userFieldValues)
+      .where(eq(userFieldValues.userId, userId));
 
-    // 5. Finally the user row itself.
+    // 5. text_overrides has no user FK — nothing to delete.
+
+    // 6. Finally the user row itself.
     res = await db
       .delete(users)
       .where(eq(users.id, userId))
@@ -606,6 +613,130 @@ export async function deleteUserAction(
     ok: true,
     message: "User and all related records deleted successfully.",
   };
+}
+
+// ---------- Bulk account deletion (admin-only) ----------
+//
+// The multi-select sweep behind the Users grid toolbar. Same capability, same
+// cascade order, same self-delete guard as deleteUserAction — the differences
+// are all about blast radius:
+//
+//   ATOMIC PER USER. Each account's four deletes go out as ONE db.batch(),
+//   which libSQL executes inside an implicit transaction. So a given account is
+//   either fully removed (tickets, ledgers, attendance, row) or not touched at
+//   all — there is no state where a student's row is gone but their fee history
+//   is orphaned. The batch is per user rather than per operation deliberately:
+//   one transaction across 100 accounts would mean a single failure rolls back
+//   99 successful deletions and reports nothing useful, which is exactly the
+//   "ambiguous partial state" this is supposed to avoid.
+//
+//   EXPLICIT PER-USER REPORTING. The result names which accounts were deleted
+//   and which failed and why, so the operator never has to guess.
+//
+//   BOUNDED. At most BULK_DELETE_MAX ids per call (schema), and at most
+//   RULES.bulkDeleteUsers calls per admin per window.
+
+export type BulkDeleteFailure = {
+  id: number;
+  name: string;
+  reason: "self" | "notFound" | "deleteFailed";
+};
+
+export type BulkDeleteResult =
+  | {
+      ok: true;
+      deleted: { id: number; name: string }[];
+      failed: BulkDeleteFailure[];
+    }
+  | {
+      ok: false;
+      error: "forbidden" | "validation" | "rateLimited";
+      retryAfter?: number;
+    };
+
+export async function bulkDeleteUsersAction(
+  rawIds: number[],
+): Promise<BulkDeleteResult> {
+  // ADMIN ONLY — identical gate to the single-row delete.
+  const admin = await currentUserWithCapability("deleteUsers");
+  if (!admin) return { ok: false, error: "forbidden" };
+
+  const parsed = parseInput(bulkDeleteUsersSchema, rawIds);
+  if (!parsed.ok) return { ok: false, error: "validation" };
+  const ids = parsed.data;
+
+  const limit = await checkRateLimit(RULES.bulkDeleteUsers, String(admin.id));
+  if (!limit.allowed) {
+    return { ok: false, error: "rateLimited", retryAfter: limit.retryAfter };
+  }
+
+  // Resolve names up front, from the DB — the client's labels are not trusted,
+  // and reporting "deleted 4 accounts" without saying which is not a report.
+  const targets = await db
+    .select({ id: users.id, fullName: users.fullName })
+    .from(users)
+    .where(inArray(users.id, ids));
+  const byId = new Map(targets.map((u) => [u.id, u.fullName]));
+
+  const deleted: { id: number; name: string }[] = [];
+  const failed: BulkDeleteFailure[] = [];
+
+  for (const userId of ids) {
+    const name = byId.get(userId);
+    if (name === undefined) {
+      failed.push({ id: userId, name: String(userId), reason: "notFound" });
+      continue;
+    }
+    // An admin can never bulk-delete themselves, exactly as in the single path.
+    // Checked per id rather than by pre-filtering so the operator is TOLD their
+    // own account was skipped instead of it silently vanishing from the count.
+    if (userId === admin.id) {
+      failed.push({ id: userId, name, reason: "self" });
+      continue;
+    }
+
+    try {
+      // Children before parent, same order as deleteUserAction:
+      // support_tickets -> fee_ledgers -> attendance_logs -> users.
+      // One batch = one implicit transaction on libSQL, so this account is
+      // all-or-nothing.
+      await db.batch([
+        db.delete(supportTickets).where(eq(supportTickets.studentId, userId)),
+        db
+          .delete(feeLedgers)
+          .where(
+            or(
+              eq(feeLedgers.studentId, userId),
+              eq(feeLedgers.recordedBy, userId),
+            ),
+          ),
+        db
+          .delete(attendanceLogs)
+          .where(
+            or(
+              eq(attendanceLogs.studentId, userId),
+              eq(attendanceLogs.markedBy, userId),
+            ),
+          ),
+        // Custom column values for this user (Phase 9). Same rule: a child row
+        // must never outlive its user.
+        db.delete(userFieldValues).where(eq(userFieldValues.userId, userId)),
+        db.delete(users).where(eq(users.id, userId)),
+      ]);
+      deleted.push({ id: userId, name });
+    } catch (err) {
+      logServerError("bulkDeleteUsersAction", err, { userId });
+      failed.push({ id: userId, name, reason: "deleteFailed" });
+    }
+  }
+
+  if (deleted.length > 0) {
+    revalidatePath("/admin/users");
+    revalidatePath("/admin/requests");
+    revalidatePath("/admin");
+  }
+
+  return { ok: true, deleted, failed };
 }
 
 export async function rejectRequestAction(

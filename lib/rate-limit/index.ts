@@ -61,6 +61,16 @@ export const RULES = {
   importUser: { name: "import:user", limit: 10, windowSeconds: 10 * 60 },
   /** Account deletions, per admin. Bounds a runaway bulk delete. */
   deleteUser: { name: "delete:user", limit: 30, windowSeconds: 10 * 60 },
+  /**
+   * BULK deletions, per admin — counted per OPERATION, not per account.
+   * Deliberately separate from `deleteUser`: one bulk call can remove up to
+   * BULK_DELETE_MAX accounts, so charging it a single hit against the
+   * per-account rule would let a script erase the roster inside the allowance.
+   * Five sweeps per ten minutes is well above any real registrar workflow.
+   */
+  bulkDeleteUsers: { name: "delete:bulk", limit: 5, windowSeconds: 10 * 60 },
+  /** Custom-column definition changes (create / rename / delete), per admin. */
+  userFieldMutation: { name: "field:user", limit: 30, windowSeconds: 10 * 60 },
   /** Password assignment (approve / activate), per admin. */
   passwordOpUser: { name: "password:user", limit: 30, windowSeconds: 10 * 60 },
 } as const satisfies Record<string, RateLimitRule>;

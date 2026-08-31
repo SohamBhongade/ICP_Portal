@@ -20,7 +20,8 @@
 // DELETEs rows from, in child-before-parent order so SQLite's FOREIGN KEY
 // constraints can never fire:
 //
-//     support_tickets  ->  fee_ledgers  ->  attendance_logs  ->  users
+//     support_tickets  ->  fee_ledgers  ->  attendance_logs
+//                      ->  user_field_values  ->  users
 
 import { config } from "dotenv";
 config({ path: ".env.local" });
@@ -31,6 +32,7 @@ import {
   attendanceLogs,
   feeLedgers,
   supportTickets,
+  userFieldValues,
   users,
 } from "./schema";
 
@@ -44,6 +46,11 @@ const DELETION_ORDER = [
   { label: "support_tickets", table: supportTickets },
   { label: "fee_ledgers", table: feeLedgers },
   { label: "attendance_logs", table: attendanceLogs },
+  // Phase 9. Every user_field_values row references a user, so it MUST be
+  // cleared before the users table — otherwise a reset leaves rows pointing at
+  // ids that no longer exist, and the next seed silently re-associates them
+  // with whatever account happens to reuse the id.
+  { label: "user_field_values", table: userFieldValues },
   { label: "users", table: users },
 ] as const;
 

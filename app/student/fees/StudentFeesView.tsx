@@ -9,6 +9,7 @@ import { useT } from "@/components/i18n/LanguageProvider";
 import { Editable } from "@/components/edit-mode/Editable";
 import {
   balanceToneClass,
+  feeParticularsLabel,
   formatCurrency,
   type FeeBalances,
   type LedgerRow,
@@ -81,7 +82,12 @@ export function StudentFeesView({
                     <td className="whitespace-nowrap px-4 py-3 text-muted tabular-nums">
                       {row.date}
                     </td>
-                    <td className="px-4 py-3 text-ink">{row.particulars}</td>
+                    {/* Mapped through the shared category table so a label
+                        rename reaches historical rows too — the stored value
+                        itself is never rewritten. */}
+                    <td className="px-4 py-3 text-ink">
+                      {feeParticularsLabel(row.particulars, t)}
+                    </td>
                     <td className="px-4 py-3 text-muted">
                       {row.receiptNo ?? "—"}
                     </td>

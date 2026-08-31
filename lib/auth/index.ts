@@ -10,7 +10,6 @@ import { db } from "@/db";
 import { users, type User } from "@/db/schema";
 import {
   SESSION_COOKIE,
-  SESSION_MAX_AGE_SECONDS,
   createSessionToken,
   verifySessionToken,
   type Role,
@@ -51,31 +50,52 @@ export async function getCurrentUser(): Promise<User | null> {
  * mismatched Path or SameSite leaves an orphan the browser keeps sending).
  *
  *   httpOnly  — never readable from JavaScript, so XSS cannot exfiltrate it.
- *   secure    — HTTPS-only in production. Left off in dev so http://localhost
- *               still works; NODE_ENV is build-time, not attacker-controlled.
+ *   secure    — HTTPS-only in production. Explicitly false in development so
+ *               http://localhost still works; NODE_ENV is build-time, not
+ *               attacker-controlled.
  *   sameSite  — "lax": not sent on cross-site POSTs (CSRF), still sent on
  *               top-level navigation so following a link keeps you signed in.
  *   path      — explicit "/": one cookie for the whole app, one to clear.
- *   maxAge    — explicit lifetime, mirroring the signed `exp` inside the token
- *               (the token's exp is what is actually enforced per request).
+ *
+ * NO Max-Age AND NO Expires — see setSession below. That omission is what makes
+ * this a session cookie, and it is load-bearing.
  */
 const SESSION_COOKIE_OPTIONS = {
   httpOnly: true,
-  secure: process.env.NODE_ENV === "production",
+  secure: process.env.NODE_ENV === "production" ? true : false,
   sameSite: "lax",
   path: "/",
 } as const;
 
-/** Issue a session cookie for a user. */
+/**
+ * Issue a session cookie for a user.
+ *
+ * DELIBERATELY NO `maxAge` AND NO `expires`.
+ *
+ * A cookie carrying neither is a *session cookie*: the browser holds it in
+ * memory only and drops it when the browser process ends. A cookie carrying
+ * either one is persistent and survives a full restart, which is what used to
+ * let a closed-and-restored tab (Ctrl+Shift+T) walk straight back into an
+ * authenticated session. Adding either attribute back here silently re-opens
+ * that hole, so do not "helpfully" restore them.
+ *
+ * This is only half the fix. Chrome's session restore (and "continue where you
+ * left off") deliberately preserves in-memory session cookies across a restart,
+ * so the cookie alone cannot be trusted to have died. The other half is
+ * components/auth/SessionTabGuard.tsx, which requires a per-tab sessionStorage
+ * marker that browsers do NOT restore in the same way.
+ *
+ * SESSION_MAX_AGE_SECONDS still bounds the session — it is baked into the
+ * signed `exp` inside the token itself (lib/auth/session.ts), which is what is
+ * actually enforced on every request. Dropping the cookie attribute shortens
+ * the session, it never lengthens it: the token remains the hard ceiling.
+ */
 export async function setSession(
   payload: Omit<SessionPayload, "exp">,
 ): Promise<void> {
   const token = await createSessionToken(payload);
   const store = await cookies();
-  store.set(SESSION_COOKIE, token, {
-    ...SESSION_COOKIE_OPTIONS,
-    maxAge: SESSION_MAX_AGE_SECONDS,
-  });
+  store.set(SESSION_COOKIE, token, SESSION_COOKIE_OPTIONS);
 }
 
 /**
@@ -86,6 +106,10 @@ export async function setSession(
  * identical attributes it was set with, then delete it. The overwrite is the
  * part that reliably evicts it — a bare delete can miss when attributes differ,
  * leaving the old token in the jar.
+ *
+ * The `maxAge: 0` / `expires: 0` here are NOT a cookie lifetime and must stay:
+ * they are the standard mechanism for *deleting* a cookie. setSession is the
+ * one that must carry neither.
  */
 export async function clearSession(): Promise<void> {
   const store = await cookies();

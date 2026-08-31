@@ -6,85 +6,52 @@
 // "Import CSV" modal, and a tiny toast queue shared by both flows. All visible
 // strings go through useT()/<Editable> so they honor Edit Mode text overrides.
 
-import { useEffect, useMemo, useState, useTransition } from "react";
+import { useCallback, useEffect, useMemo, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import {
-  ArrowDown,
-  ArrowUp,
-  Pencil,
   Plus,
-  RotateCcw,
   Search,
   SlidersHorizontal,
   Trash2,
+  TriangleAlert,
   Upload,
   X,
 } from "lucide-react";
 import { useT } from "@/components/i18n/LanguageProvider";
 import { Editable } from "@/components/edit-mode/Editable";
 import type { DropdownOptionItem } from "@/components/edit-mode/EditableDropdown";
-import { deleteUserAction } from "@/app/actions/onboarding";
+import {
+  bulkDeleteUsersAction,
+  deleteUserAction,
+} from "@/app/actions/onboarding";
 import { saveUsersTablePreferencesAction } from "@/app/actions/preferences";
 import type { Role } from "@/lib/auth/permissions";
 import { EditUserDrawer } from "./EditUserDrawer";
 import {
-  DEFAULT_USERS_TABLE_LAYOUT,
-  USERS_COLUMN_LABEL_KEY,
   sanitizeUsersTableLayout,
-  type UsersColumnKey,
   type UsersTableLayout,
 } from "@/lib/table-layout";
+import { customColumnKey } from "@/lib/user-fields";
+import { ColumnManager } from "./ColumnManager";
 import { CreateUserDrawer } from "./CreateUserDrawer";
 import { CsvImport } from "./CsvImport";
-import { formatDisplayDate } from "@/lib/dates";
+import { UsersTable, type SelectionApi } from "./UsersTable";
+import type { CustomField, Toast, ToastKind, UserRow } from "./types";
 
-export type UserRow = {
-  id: number;
-  fullName: string;
-  studentId: string | null;
-  email: string | null;
-  phone: string | null;
-  role: Role;
-  course: string | null;
-  className: string | null;
-  practicalBatch: string | null;
-  status: "pending" | "active" | "rejected";
-  // Joined date — a Date across the RSC boundary, but tolerate string/number.
-  createdAt: Date | string | number | null;
-};
-
-type Translator = ReturnType<typeof useT>;
-
-export type ToastKind = "success" | "error";
-export type Toast = { id: number; kind: ToastKind; message: string };
-
-const ROLE_LABEL: Record<Role, string> = {
-  admin: "onboarding.roleAdmin",
-  principal: "onboarding.rolePrincipal",
-  "office admin": "onboarding.roleOfficeAdmin",
-  faculty: "onboarding.roleFaculty",
-  staff: "onboarding.roleStaff",
-  student: "onboarding.roleStudent",
-};
-
-const STATUS_LABEL: Record<UserRow["status"], string> = {
-  active: "onboarding.statusActive",
-  pending: "onboarding.statusPending",
-  rejected: "onboarding.statusRejected",
-};
-
-const STATUS_STYLE: Record<UserRow["status"], string> = {
-  active: "bg-mint text-teal",
-  pending: "bg-lavender text-primary",
-  rejected: "bg-lavender text-danger",
-};
+// The row/toast types moved to ./types so the table and the drawers can import
+// them without pulling this orchestrator into their module graph. Re-exported
+// here because CreateUserDrawer / CsvImport / EditUserDrawer import them from
+// this path.
+export type { UserRow, Toast, ToastKind } from "./types";
 
 export function UsersContent({
   users,
+  customFields,
   courseOptions,
   classOptions,
   batchOptions,
   canDelete,
+  canManageColumns,
   canEditStudents,
   canCreateUsers,
   currentUserId,
@@ -92,11 +59,18 @@ export function UsersContent({
   savedLayout,
 }: {
   users: UserRow[];
+  // Live admin-defined columns. Drives the extra grid columns, the column
+  // manager, and the import mapping targets.
+  customFields: CustomField[];
   courseOptions: DropdownOptionItem[];
   classOptions: DropdownOptionItem[];
   batchOptions: DropdownOptionItem[];
-  // Only Admins may delete — the column + button are hidden otherwise.
+  // Only Admins may delete — the column, the row buttons, and the bulk
+  // selection rail are all hidden otherwise.
   canDelete: boolean;
+  // `settings` holders (admin only) may create / rename / delete columns.
+  // Presentation only: app/actions/user-fields.ts re-checks the same gate.
+  canManageColumns: boolean;
   // manageUsers holders (admin / principal / office admin) may edit a user.
   canEditStudents: boolean;
   // Only Admins may create accounts outright — the "Add user" and "Import CSV"
@@ -131,6 +105,14 @@ export function UsersContent({
     [layout],
   );
 
+  // --- Bulk selection (Phase 9) -------------------------------------------
+  // Scope is ALWAYS the current filtered result set. There is deliberately no
+  // "select every user in the database" affordance: the operator can only ever
+  // act on rows they can see, so a selection can never quietly outgrow the
+  // filter that produced it.
+  const [selected, setSelected] = useState<Set<number>>(new Set());
+  const [bulkOpen, setBulkOpen] = useState(false);
+
   const [toasts, setToasts] = useState<Toast[]>([]);
   const notify = (kind: ToastKind, message: string) =>
     setToasts((prev) => [...prev, { id: Date.now() + Math.random(), kind, message }]);
@@ -142,8 +124,11 @@ export function UsersContent({
   const [editTarget, setEditTarget] = useState<UserRow | null>(null);
   const [deleting, startDelete] = useTransition();
 
-  // Whether the row-actions column renders at all (Edit and/or Delete).
-  const canManage = canEditStudents || canDelete;
+  // Stable row callbacks — UsersTable memoizes each row, and a fresh arrow
+  // function per render would defeat that for every row on every keystroke in
+  // the search box.
+  const openEdit = useCallback((user: UserRow) => setEditTarget(user), []);
+  const openDelete = useCallback((user: UserRow) => setDeleteTarget(user), []);
 
   const confirmDelete = () => {
     if (!deleteTarget) return;
@@ -176,7 +161,12 @@ export function UsersContent({
   // it to the user's account. On failure we surface a toast but keep the local
   // change so the admin isn't blocked; a refresh would re-hydrate the saved one.
   const saveLayout = (next: UsersTableLayout) => {
-    const clean = sanitizeUsersTableLayout(next);
+    // Same whitelist the server applies, so the optimistic local layout and the
+    // persisted one can never disagree about which columns exist.
+    const clean = sanitizeUsersTableLayout(
+      next,
+      customFields.map((f) => customColumnKey(f.key)),
+    );
     setLayout(clean);
     setConfigOpen(false);
     startSaveLayout(async () => {
@@ -202,6 +192,110 @@ export function UsersContent({
       );
     });
   }, [users, search, roleFilter, courseFilter, classFilter]);
+
+  // CLEAR THE SELECTION WHENEVER THE RESULT SET MOVES.
+  //
+  // Without this, narrowing a filter would leave rows selected that are no
+  // longer on screen, and the next "delete 12 selected" would hit accounts the
+  // operator cannot see — the exact failure mode bulk actions are notorious
+  // for. Clearing on every filter/search change is the blunt, safe rule: the
+  // selection only ever describes what is currently visible.
+  //
+  // Done as a render-phase adjustment rather than in an effect, deliberately.
+  // An effect would clear the selection one render LATE, so for a single frame
+  // the toolbar would show a count belonging to the previous filter — and React
+  // flags synchronous setState in an effect for exactly that reason. Comparing
+  // a signature during render is the documented pattern for state that must
+  // reset when an input changes; React re-runs this component immediately and
+  // never commits the stale tree.
+  // JSON, not a delimiter-joined string: a search box can contain any
+  // character, so any separator picked by hand is a separator a user can type.
+  const filterSignature = JSON.stringify([
+    search,
+    roleFilter,
+    courseFilter,
+    classFilter,
+  ]);
+  const [lastFilterSignature, setLastFilterSignature] = useState(filterSignature);
+  if (lastFilterSignature !== filterSignature) {
+    setLastFilterSignature(filterSignature);
+    if (selected.size > 0) setSelected(new Set());
+  }
+
+  // Only meaningful for someone who can actually act on a selection.
+  const canSelect = canDelete;
+
+  const toggleRow = useCallback((id: number) => {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }, []);
+
+  // "Select all" = every row in the CURRENT filtered set, nothing more.
+  const toggleAllFiltered = useCallback(
+    (checked: boolean) => {
+      setSelected(checked ? new Set(filtered.map((u) => u.id)) : new Set());
+    },
+    [filtered],
+  );
+
+  const selection: SelectionApi | undefined = canSelect
+    ? { selected, toggle: toggleRow, toggleAll: toggleAllFiltered }
+    : undefined;
+
+  // Guard against a stale id surviving a data refresh (a row deleted in another
+  // tab). The toolbar count and the delete payload both read from this.
+  const selectedRows = useMemo(
+    () => filtered.filter((u) => selected.has(u.id)),
+    [filtered, selected],
+  );
+
+  const [bulkDeleting, startBulkDelete] = useTransition();
+
+  const confirmBulkDelete = () => {
+    const ids = selectedRows.map((u) => u.id);
+    if (ids.length === 0) return;
+    startBulkDelete(async () => {
+      const result = await bulkDeleteUsersAction(ids);
+      if (!result.ok) {
+        notify(
+          "error",
+          result.error === "rateLimited"
+            ? t("onboarding.errors.rateLimited")
+            : result.error === "forbidden"
+              ? t("onboarding.errors.forbidden")
+              : t("onboarding.errors.unknown"),
+        );
+        return;
+      }
+      // Report BOTH halves. A bare "deleted 9" after asking for 12 is exactly
+      // the ambiguous partial state this flow exists to avoid.
+      if (result.failed.length === 0) {
+        notify(
+          "success",
+          t("onboarding.bulk.deleted", { count: result.deleted.length }),
+        );
+      } else {
+        notify(
+          result.deleted.length > 0 ? "success" : "error",
+          t("onboarding.bulk.deletedWithErrors", {
+            count: result.deleted.length,
+            failed: result.failed.length,
+            names: result.failed
+              .slice(0, 3)
+              .map((f) => f.name)
+              .join(", "),
+          }),
+        );
+      }
+      setSelected(new Set());
+      setBulkOpen(false);
+      router.refresh();
+    });
+  };
 
   return (
     <div className="flex flex-col gap-6">
@@ -310,78 +404,66 @@ export function UsersContent({
               : t("onboarding.resultsCountPlural", { count: filtered.length })}
           </p>
 
-          <div className="overflow-hidden rounded-lg border border-line bg-surface shadow-sm">
-            <div className="overflow-x-auto">
-              <table className="w-full min-w-[680px] text-left text-sm">
-                <thead>
-                  <tr className="border-b border-line bg-canvas text-xs uppercase tracking-wide text-muted">
-                    {/* Fully dynamic — every column (incl. Name) follows the saved layout. */}
-                    {visibleColumns.map((key) => (
-                      <Th key={key}>{t(USERS_COLUMN_LABEL_KEY[key])}</Th>
-                    ))}
-                    {canManage && <Th>{t("onboarding.colActions")}</Th>}
-                  </tr>
-                </thead>
-                <tbody>
-                  {filtered.length === 0 ? (
-                    <tr>
-                      <td
-                        colSpan={visibleColumns.length + (canManage ? 1 : 0)}
-                        className="px-4 py-10 text-center text-sm text-muted"
-                      >
-                        {t("onboarding.noResults")}
-                      </td>
-                    </tr>
-                  ) : (
-                    filtered.map((u) => (
-                      <tr
-                        key={u.id}
-                        className="border-b border-line last:border-0 hover:bg-canvas"
-                      >
-                        {visibleColumns.map((key) => (
-                          <UserCell key={key} column={key} user={u} t={t} />
-                        ))}
-                        {canManage && (
-                          <td className="px-4 py-3">
-                            <div className="flex items-center gap-2">
-                              {canEditStudents && (
-                                <button
-                                  type="button"
-                                  onClick={() => setEditTarget(u)}
-                                  aria-label={t("onboarding.edit")}
-                                  title={t("onboarding.edit")}
-                                  className="inline-flex items-center gap-1 rounded-md border border-line px-2 py-1 text-xs font-medium text-ink hover:border-teal hover:bg-lavender"
-                                >
-                                  <Pencil className="size-3.5" />
-                                  <span className="hidden sm:inline">
-                                    {t("onboarding.edit")}
-                                  </span>
-                                </button>
-                              )}
-                              {canDelete && (
-                                <button
-                                  type="button"
-                                  onClick={() => setDeleteTarget(u)}
-                                  aria-label={t("onboarding.delete")}
-                                  title={t("onboarding.delete")}
-                                  className="inline-flex items-center gap-1 rounded-md border border-line px-2 py-1 text-xs font-medium text-danger hover:border-danger/40 hover:bg-danger/10"
-                                >
-                                  <Trash2 className="size-3.5" />
-                                  <span className="hidden sm:inline">
-                                    {t("onboarding.delete")}
-                                  </span>
-                                </button>
-                              )}
-                            </div>
-                          </td>
-                        )}
-                      </tr>
-                    ))
-                  )}
-                </tbody>
-              </table>
+          {/* Persistent selection toolbar. Present whenever anything is
+              selected, and it never leaves the filter's scope ambiguous — the
+              count always reads "N of M filtered". */}
+          {canSelect && selectedRows.length > 0 && (
+            <div className="mb-3 flex flex-wrap items-center gap-3 rounded-lg border border-primary/30 bg-lavender px-4 py-3">
+              <span className="text-sm font-semibold text-primary [font-variant-numeric:tabular-nums]">
+                {t("onboarding.bulk.selectedCount", {
+                  count: selectedRows.length,
+                  total: filtered.length,
+                })}
+              </span>
+              {selectedRows.length < filtered.length && (
+                <button
+                  type="button"
+                  onClick={() => toggleAllFiltered(true)}
+                  className="cursor-pointer text-sm font-medium text-teal underline-offset-2 hover:underline"
+                >
+                  {t("onboarding.bulk.selectAllFiltered", {
+                    count: filtered.length,
+                  })}
+                </button>
+              )}
+              <button
+                type="button"
+                onClick={() => setSelected(new Set())}
+                className="cursor-pointer text-sm font-medium text-muted underline-offset-2 hover:text-ink hover:underline"
+              >
+                {t("onboarding.bulk.clear")}
+              </button>
+              <span className="ml-auto flex items-center gap-3">
+                {/* The scope is spelled out again next to the destructive
+                    button, because that is where it actually matters. */}
+                <span className="hidden text-xs text-muted sm:inline">
+                  {t("onboarding.bulk.scopeNote")}
+                </span>
+                <button
+                  type="button"
+                  onClick={() => setBulkOpen(true)}
+                  className="inline-flex cursor-pointer items-center gap-1.5 rounded-md bg-danger px-3 py-1.5 text-sm font-medium text-white hover:opacity-90"
+                >
+                  <Trash2 className="size-3.5" />
+                  {t("onboarding.bulk.deleteSelected", {
+                    count: selectedRows.length,
+                  })}
+                </button>
+              </span>
             </div>
-          </div>
+          )}
+
+          <UsersTable
+            rows={filtered}
+            columns={visibleColumns}
+            customFields={customFields}
+            totalCount={users.length}
+            canEditStudents={canEditStudents}
+            canDelete={canDelete}
+            onEdit={openEdit}
+            onDelete={openDelete}
+            selection={selection}
+          />
 
           <p className="mt-3 text-xs text-muted">
             {t("onboarding.showing", {
@@ -414,17 +496,34 @@ export function UsersContent({
           courseOptions={courseOptions}
           classOptions={classOptions}
           batchOptions={batchOptions}
+          customFields={customFields}
           onClose={() => setEditTarget(null)}
           notify={notify}
         />
       )}
 
       {configOpen && (
-        <ColumnConfig
+        <ColumnManager
           layout={layout}
+          customFields={customFields}
+          canManageColumns={canManageColumns}
           saving={savingLayout}
           onCancel={() => setConfigOpen(false)}
           onSave={saveLayout}
+          notify={notify}
+          // A definition change is global and already committed server-side;
+          // refreshing re-runs the page query so the new column list, the
+          // re-sanitized layout, and the cell values all arrive together.
+          onFieldsChanged={() => router.refresh()}
+        />
+      )}
+
+      {bulkOpen && (
+        <BulkDeleteConfirm
+          users={selectedRows}
+          pending={bulkDeleting}
+          onCancel={() => setBulkOpen(false)}
+          onConfirm={confirmBulkDelete}
         />
       )}
 
@@ -442,109 +541,34 @@ export function UsersContent({
   );
 }
 
-function Th({ children }: { children: React.ReactNode }) {
-  return <th className="whitespace-nowrap px-4 py-3 font-medium">{children}</th>;
-}
-
 /**
- * Format a joined date defensively — the value crosses the RSC boundary and may
- * arrive as a Date, an ISO string, or an epoch number.
+ * Bulk-delete confirmation.
  *
- * Uses formatDisplayDate, which pins BOTH locale and time zone. The previous
- * `toLocaleDateString(undefined, ...)` fell back to the host default, so the
- * server (en-US, UTC) and the browser (the visitor's locale and zone) produced
- * different strings for the same date — a hydration mismatch on every
- * non-en-US visitor, with the column visibly changing after load.
+ * This is the most destructive action in the console — it cascades across
+ * tickets, ledgers, attendance and custom values for every selected account,
+ * and there is no undo. So it does three things a plain "Are you sure?" does
+ * not:
+ *
+ *   1. States the EXACT count, and lists the accounts (scrollable) so the
+ *      operator can see what they actually selected rather than a number.
+ *   2. Requires typing that count. A second click is muscle memory; typing "12"
+ *      is a deliberate act, and it forces the operator to read the number.
+ *   3. Says plainly that it is permanent and names what else goes with it.
  */
-function formatJoined(value: Date | string | number | null): string {
-  return formatDisplayDate(value, {
-    year: "numeric",
-    month: "short",
-    day: "numeric",
-  });
-}
-
-/** Renders a single <td> for one customizable column. The Name column and the
- *  row-actions column are rendered inline in UsersContent (they're structural). */
-function UserCell({
-  column,
-  user: u,
-  t,
-}: {
-  column: UsersColumnKey;
-  user: UserRow;
-  t: Translator;
-}) {
-  switch (column) {
-    case "name":
-      return <td className="px-4 py-3 font-medium text-ink">{u.fullName}</td>;
-    case "rollNo":
-      return <td className="px-4 py-3 text-muted">{u.studentId ?? "—"}</td>;
-    case "email":
-      return <td className="px-4 py-3 text-muted">{u.email ?? "—"}</td>;
-    case "phone":
-      return <td className="px-4 py-3 text-muted">{u.phone ?? "—"}</td>;
-    case "role":
-      return <td className="px-4 py-3 text-ink">{t(ROLE_LABEL[u.role])}</td>;
-    case "course":
-      return <td className="px-4 py-3 text-muted">{u.course ?? "—"}</td>;
-    case "className":
-      return <td className="px-4 py-3 text-muted">{u.className ?? "—"}</td>;
-    case "status":
-      return (
-        <td className="px-4 py-3">
-          <span
-            className={`inline-block rounded-full px-2 py-0.5 text-xs font-medium ${STATUS_STYLE[u.status]}`}
-          >
-            {t(STATUS_LABEL[u.status])}
-          </span>
-        </td>
-      );
-    case "joinedDate":
-      return (
-        <td className="px-4 py-3 text-muted [font-variant-numeric:tabular-nums]">
-          {formatJoined(u.createdAt)}
-        </td>
-      );
-  }
-}
-
-/**
- * Column customization panel. Edits a DRAFT copy of the layout (order +
- * visibility) so nothing changes until "Save" — which persists to the user's
- * account. Reordering uses up/down arrows (no drag-drop dependency); visibility
- * uses a checkbox per row. "Restore defaults" resets the draft to every column
- * visible in the canonical order.
- */
-function ColumnConfig({
-  layout,
-  saving,
+function BulkDeleteConfirm({
+  users,
+  pending,
   onCancel,
-  onSave,
+  onConfirm,
 }: {
-  layout: UsersTableLayout;
-  saving: boolean;
+  users: UserRow[];
+  pending: boolean;
   onCancel: () => void;
-  onSave: (next: UsersTableLayout) => void;
+  onConfirm: () => void;
 }) {
   const t = useT();
-  const [draft, setDraft] = useState<UsersTableLayout>(layout);
-
-  const toggle = (index: number) =>
-    setDraft((prev) =>
-      prev.map((c, i) => (i === index ? { ...c, visible: !c.visible } : c)),
-    );
-
-  const move = (index: number, dir: -1 | 1) =>
-    setDraft((prev) => {
-      const target = index + dir;
-      if (target < 0 || target >= prev.length) return prev;
-      const next = [...prev];
-      [next[index], next[target]] = [next[target], next[index]];
-      return next;
-    });
-
-  const visibleCount = draft.filter((c) => c.visible).length;
+  const [typed, setTyped] = useState("");
+  const confirmed = typed.trim() === String(users.length);
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
@@ -557,93 +581,66 @@ function ColumnConfig({
       <div
         role="dialog"
         aria-modal="true"
-        className="relative flex max-h-[85vh] w-full max-w-md flex-col rounded-lg border border-line bg-surface shadow-xl"
+        className="relative flex max-h-[85vh] w-full max-w-md flex-col rounded-lg border border-line bg-surface p-6 shadow-xl"
       >
-        <div className="flex items-start gap-3 border-b border-line p-5">
-          <span className="rounded-full bg-lavender p-2 text-primary">
-            <SlidersHorizontal className="size-5" aria-hidden />
+        <div className="flex items-start gap-3">
+          <span className="rounded-full bg-danger/10 p-2 text-danger">
+            <TriangleAlert className="size-5" aria-hidden />
           </span>
-          <div className="min-w-0 flex-1">
+          <div className="min-w-0">
             <h2 className="text-base font-semibold text-ink">
-              {t("onboarding.columns.title")}
+              {t("onboarding.bulk.confirmTitle", { count: users.length })}
             </h2>
             <p className="mt-1 text-sm text-muted">
-              {t("onboarding.columns.hint")}
+              {t("onboarding.bulk.confirmBody", { count: users.length })}
+            </p>
+            <p className="mt-2 text-sm font-medium text-danger">
+              {t("onboarding.bulk.irreversible")}
             </p>
           </div>
-          <button
-            type="button"
-            onClick={onCancel}
-            aria-label={t("common.cancel")}
-            className="rounded p-1 text-muted hover:text-ink"
-          >
-            <X className="size-4" />
-          </button>
         </div>
 
-        <ul className="flex-1 overflow-y-auto p-3">
-          {draft.map((col, i) => (
-            <li
-              key={col.key}
-              className="flex items-center gap-3 rounded-md px-2 py-2 hover:bg-canvas"
-            >
-              <label className="flex flex-1 cursor-pointer items-center gap-3">
-                <input
-                  type="checkbox"
-                  checked={col.visible}
-                  onChange={() => toggle(i)}
-                  className="size-4 accent-primary"
-                />
-                <span
-                  className={`text-sm font-medium ${col.visible ? "text-ink" : "text-muted"}`}
-                >
-                  {t(USERS_COLUMN_LABEL_KEY[col.key])}
-                </span>
-              </label>
-              <div className="flex items-center gap-1">
-                <button
-                  type="button"
-                  onClick={() => move(i, -1)}
-                  disabled={i === 0}
-                  aria-label={t("onboarding.columns.moveUp")}
-                  title={t("onboarding.columns.moveUp")}
-                  className="rounded border border-line p-1 text-muted hover:bg-lavender hover:text-ink disabled:cursor-not-allowed disabled:opacity-30"
-                >
-                  <ArrowUp className="size-3.5" />
-                </button>
-                <button
-                  type="button"
-                  onClick={() => move(i, 1)}
-                  disabled={i === draft.length - 1}
-                  aria-label={t("onboarding.columns.moveDown")}
-                  title={t("onboarding.columns.moveDown")}
-                  className="rounded border border-line p-1 text-muted hover:bg-lavender hover:text-ink disabled:cursor-not-allowed disabled:opacity-30"
-                >
-                  <ArrowDown className="size-3.5" />
-                </button>
-              </div>
+        <ul className="mt-4 max-h-40 overflow-y-auto rounded-md border border-line bg-canvas px-3 py-2 text-sm">
+          {users.map((u) => (
+            <li key={u.id} className="truncate py-0.5 text-ink">
+              {u.fullName}
+              {u.studentId && (
+                <span className="text-muted"> - {u.studentId}</span>
+              )}
             </li>
           ))}
         </ul>
 
-        <div className="flex items-center justify-between gap-2 border-t border-line p-4">
+        <label className="mt-4 block">
+          <span className="mb-1 block text-xs font-medium text-ink">
+            {t("onboarding.bulk.typeCount", { count: users.length })}
+          </span>
+          <input
+            autoFocus
+            inputMode="numeric"
+            value={typed}
+            onChange={(e) => setTyped(e.target.value)}
+            className="w-full rounded-md border border-line bg-surface px-3 py-2 text-sm text-ink focus:border-teal"
+          />
+        </label>
+
+        <div className="mt-5 flex justify-end gap-2">
           <button
             type="button"
-            onClick={() => setDraft(DEFAULT_USERS_TABLE_LAYOUT)}
-            className="inline-flex items-center gap-1.5 rounded-md border border-line bg-surface px-3 py-2 text-sm font-medium text-ink hover:bg-lavender"
+            onClick={onCancel}
+            className="cursor-pointer rounded-md border border-line bg-surface px-4 py-2 text-sm font-medium text-ink hover:bg-lavender"
           >
-            <RotateCcw className="size-3.5" /> {t("onboarding.columns.restore")}
+            {t("common.cancel")}
           </button>
           <button
             type="button"
-            onClick={() => onSave(draft)}
-            disabled={saving || visibleCount === 0}
-            title={
-              visibleCount === 0 ? t("onboarding.columns.needOne") : undefined
-            }
-            className="rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary-hover disabled:opacity-50"
+            onClick={onConfirm}
+            disabled={pending || !confirmed}
+            className="cursor-pointer rounded-md bg-danger px-4 py-2 text-sm font-medium text-white hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
           >
-            {saving ? t("onboarding.columns.saving") : t("onboarding.columns.save")}
+            {pending
+              ? t("onboarding.deleting")
+              : t("onboarding.bulk.deleteSelected", { count: users.length })}
           </button>
         </div>
       </div>
