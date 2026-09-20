@@ -67,6 +67,16 @@ const SCROLL_BOX = "max-h-[min(68vh,42rem)] min-h-[14rem]";
 /** The selection column's synthetic key inside the frozen-left rail. */
 const SELECT_KEY = "select";
 
+/**
+ * DOM id of the grid's scroll box.
+ *
+ * Exported so the orchestrator can preserve the scroll offset across a bulk
+ * action: the node itself survives the re-render, but deleting rows shortens
+ * the content and the browser clamps scrollTop, which would jump an operator
+ * back to the top of a 400-row roster right after they acted on row 380.
+ */
+export const USERS_SCROLL_ID = "users-grid-scroll";
+
 export type SelectionApi = {
   /** Currently selected row ids. Always a subset of what is on screen. */
   selected: ReadonlySet<number>;
@@ -183,16 +193,21 @@ function UsersGrid({
     <div className="isolate overflow-hidden rounded-lg border border-line bg-surface shadow-sm">
       <div
         ref={scrollRef}
+        id={USERS_SCROLL_ID}
         data-edge-left={edge.left}
         data-edge-right={edge.right}
         tabIndex={0}
         role="region"
         aria-label={t("onboarding.tableRegion")}
-        // `overflow-auto` bounds BOTH axes to this element, and
+        // `.dt-scroll` (globals.css) bounds BOTH axes to this element with
+        // `overflow: scroll` — permanently drawn, high-contrast tracks, because
+        // an overlay scrollbar that only appears on hover reads as "this table
+        // does not scroll" to the office staff who use this screen. It replaces
+        // the previous `overflow-auto`; see the CSS for the full reasoning.
         // `overscroll-x-contain` stops a horizontal fling from chaining out to
-        // the document once the rail hits its end. Together these are what keep
-        // the page itself from ever scrolling sideways.
-        className={`relative ${SCROLL_BOX} overflow-auto overscroll-x-contain`}
+        // the document once the rail hits its end, which is what keeps the page
+        // itself from ever scrolling sideways.
+        className={`relative ${SCROLL_BOX} dt-scroll overscroll-x-contain`}
       >
         <table
           className="w-full border-separate border-spacing-0 text-left text-sm"
@@ -561,7 +576,8 @@ function CellValue({
     column === "rollNo" ||
     column === "admissionYear" ||
     field?.type === "number" ||
-    field?.type === "date";
+    field?.type === "date" ||
+    field?.type === "year";
 
   return (
     <span

@@ -26,14 +26,14 @@
 // the operator does not pick it twice.
 
 import bcrypt from "bcryptjs";
-import { and, eq, or, sql, type SQL } from "drizzle-orm";
+import { and, eq, inArray, or, sql, type SQL } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import { db } from "@/db";
 import { feeLedgers, userFieldValues, users } from "@/db/schema";
 import { currentUserWithCapability } from "@/lib/auth";
 import { can, type Role } from "@/lib/auth/permissions";
 import { todayIso } from "@/lib/dates";
-import { parseAdmissionYear } from "@/lib/academic-year";
+import { readAdmissionYear } from "@/lib/academic-year";
 import type { FeeCategory } from "@/lib/fees";
 import {
   buildFeeLines,
@@ -54,8 +54,8 @@ import {
 } from "@/lib/import/parse";
 import { z, parseInput, LIMITS, isoDate } from "@/lib/validation/core";
 import {
+  coerceFieldValue,
   customColumnKey,
-  validateFieldValue,
   type CustomField,
 } from "@/lib/user-fields";
 import { listUserFields } from "@/lib/user-fields-query";
@@ -187,11 +187,36 @@ export type RowFailure = {
     | "invalidEmail"
     | "invalidCourse"
     | "invalidFee"
+    /** A mapped date/year cell could not be read. See `column` + `detail`. */
+    | "unreadableDate"
     | "duplicate"
     | "nameMismatch"
     | "unknown";
   /** For invalidFee: the stored value of the category whose cell was bad. */
   detail?: string;
+  /** For unreadableDate: the human label of the column that failed. */
+  column?: string;
+  /** For unreadableDate: the raw cell text, so the operator can see the typo. */
+  raw?: string;
+};
+
+/**
+ * One cell that could not be stored, reported per row AND per column.
+ *
+ * The bug this exists for: an unparseable date used to be discarded with no
+ * error at all, so an operator saw "Imported 20 students" and three blank
+ * columns. EVERY unreadable cell is listed here with the raw text that caused
+ * it, whether or not the row itself was written — `failed` says which rows were
+ * refused, this says which values were lost.
+ */
+export type CellIssue = {
+  row: number;
+  /** The portal column's display label ("D.O.B", "Year of Leaving"). */
+  column: string;
+  /** The raw cell text exactly as the sheet held it. */
+  raw: string;
+  /** Why it could not be read. The UI translates this. */
+  issue: "notDate" | "notYear" | "notNumber" | "notAnOption" | "tooLong";
 };
 
 export type ImportResult =
@@ -205,6 +230,8 @@ export type ImportResult =
       /** Existing students matched but already up to date (nothing to change). */
       unchanged: number;
       failed: RowFailure[];
+      /** Every cell that could not be read. See the type's note. */
+      cellIssues: CellIssue[];
     }
   | { ok: false; error: ImportError; retryAfter?: number };
 
@@ -348,6 +375,13 @@ export async function importStudentsFileAction(
   // instead of reporting them as duplicates. Off unless the operator ticks it.
   const updateExisting = formData.get("updateExisting") === "true";
 
+  // Import a row even though one of its date/year cells is unreadable, leaving
+  // that cell blank. OFF by default, on purpose: the default must be to REFUSE
+  // the row and say why, because the failure mode this whole change exists to
+  // fix was importing silently with the value dropped. The operator has to
+  // choose to accept the blank, having seen it in the preview.
+  const allowBlankDates = formData.get("allowBlankDates") === "true";
+
   // RE-PARSE. The preview's rows went through the client and are not trusted.
   const parsed = await parseImportFile(file);
   if (!parsed.ok) return { ok: false, error: parsed.reason };
@@ -358,10 +392,19 @@ export async function importStudentsFileAction(
     customTargets,
     feeTargets,
     feeOptions,
-    updateExisting,
+    { updateExisting, allowBlankDates },
     actor.id,
   );
 }
+
+/**
+ * Display label for the built-in admission-year column in a CellIssue.
+ *
+ * A literal rather than an i18n key: custom columns report their own (already
+ * untranslatable) label, and a mixed list of keys and labels would be worse
+ * than one consistently-English one. Matches onboarding.csv.fieldAdmissionYear.
+ */
+const ADMISSION_YEAR_LABEL = "Year of admission";
 
 /** Pull the mapped fee cells out of a mapped row, keyed by category value. */
 function feeCellsOf(
@@ -404,10 +447,21 @@ function ledgerValues(
 /**
  * Shared insert loop. Business rules for the built-in fields are unchanged.
  *
- * Custom column values are written AFTER the user row, keyed by the id the
- * insert returned. A value that fails its column's type check is skipped and
- * the row is still counted as created — a malformed "Guardian phone" must not
- * cost the student their account, and the operator sees the column blank.
+ * DATE AND YEAR CELLS (the fix). Every mapped date-ish cell is normalized
+ * through lib/import/dates.ts BEFORE anything is written — Excel serials,
+ * DD/MM/YYYY, academic years and all. A cell that still cannot be read is
+ * RECORDED in `cellIssues` with its raw text, and by default the whole row is
+ * refused with `unreadableDate` rather than created with the value missing.
+ *
+ * What this replaces: `if (validateFieldValue(field, value)) continue;`. That
+ * line ran a strict YYYY-MM-DD check against a raw Excel serial and then
+ * dropped the value with no error, no log and no row failure. It is the reason
+ * D.O.B, Year of Admission and Year of Leaving arrived blank on every .xlsx
+ * import while Caste — a `text` column, which has no such check — arrived fine.
+ *
+ * Custom column values are still written AFTER the user row, keyed by the id
+ * the insert returned, and a write failure there still never costs the student
+ * their account.
  */
 async function insertRows(
   sheet: ParsedSheet,
@@ -415,14 +469,16 @@ async function insertRows(
   customTargets: CustomField[],
   feeTargets: FeeCategory[],
   feeOptions: FeeOptions | null,
-  updateExisting: boolean,
+  flags: { updateExisting: boolean; allowBlankDates: boolean },
   actorId: number,
 ): Promise<ImportResult> {
+  const { updateExisting, allowBlankDates } = flags;
   let created = 0;
   let updated = 0;
   let feeEntries = 0;
   let unchanged = 0;
   const failed: RowFailure[] = [];
+  const cellIssues: CellIssue[] = [];
   const buildOptions: FeeImportOptions = {
     scholarshipOnTop: feeOptions?.scholarshipOnTop ?? true,
   };
@@ -455,9 +511,64 @@ async function insertRows(
     }
     const norm = normalizeCourse(r.course);
     const year = norm.year ?? extractYear(r.className ?? "").year ?? undefined;
-    // "2024-25" / "2024-2025" -> 2024. An unreadable cell is simply left blank
-    // rather than costing the student their account.
-    const admissionYear = parseAdmissionYear(r.admissionYear) ?? undefined;
+
+    // DATE / YEAR CELLS — normalized and checked BEFORE any write, so an
+    // unreadable one is reported rather than quietly lost.
+    const rowIssues: CellIssue[] = [];
+
+    // "2024-25" / "2024-2025" / Excel serial -> 2024.
+    const admissionRaw = (r.admissionYear ?? "").trim();
+    const admission = readAdmissionYear(admissionRaw);
+    const admissionYear = admission.ok ? (admission.value ?? undefined) : undefined;
+    if (!admission.ok) {
+      rowIssues.push({
+        row: rowNo,
+        column: ADMISSION_YEAR_LABEL,
+        raw: admissionRaw,
+        issue: "notYear",
+      });
+    }
+
+    // Custom columns. Coercion happens here rather than inside the write so a
+    // bad cell can block the row before an account exists for it.
+    const customValues: { fieldId: number; value: string }[] = [];
+    for (const field of customTargets) {
+      const raw = (r[customColumnKey(field.key)] ?? "").trim();
+      if (!raw) continue;
+      const coerced = coerceFieldValue(field, raw);
+      if (!coerced.ok) {
+        rowIssues.push({
+          row: rowNo,
+          column: field.label,
+          raw,
+          issue: coerced.issue,
+        });
+        continue;
+      }
+      if (coerced.value) {
+        customValues.push({ fieldId: field.id, value: coerced.value });
+      }
+    }
+
+    // Every unreadable cell is reported either way. Whether the ROW survives is
+    // the operator's choice — and the default is that it does not.
+    cellIssues.push(...rowIssues);
+    const blockingIssue = rowIssues.find((issue) => {
+      // "Import anyway" is specifically about DATES: it lets an operator accept
+      // a blank birthday rather than lose the student. A bad `select` or
+      // `number` cell is a different mistake and still refuses the row.
+      const isDateIssue = issue.issue === "notDate" || issue.issue === "notYear";
+      return allowBlankDates ? !isDateIssue : true;
+    });
+    if (blockingIssue) {
+      failed.push({
+        row: rowNo,
+        reason: "unreadableDate",
+        column: blockingIssue.column,
+        raw: blockingIssue.raw,
+      });
+      continue;
+    }
 
     // Fee cells are validated BEFORE anything is written, so a typo like
     // "45,45S" fails the row cleanly instead of creating a student whose
@@ -503,7 +614,7 @@ async function insertRows(
         const outcome = await updateExistingStudent(
           studentId,
           fullName,
-          { admissionYear, feeLines, feeOptions },
+          { admissionYear, customValues, feeLines, feeOptions },
           actorId,
         );
         if (outcome.kind === "updated") {
@@ -528,7 +639,7 @@ async function insertRows(
           await handleExisting();
         } else {
           created++;
-          await writeCustomValues(res[0].id, r, customTargets);
+          await writeCustomValues(res[0].id, customValues);
         }
         continue;
       }
@@ -568,7 +679,7 @@ async function insertRows(
       if (inserted && inserted.length > 0) {
         created++;
         feeEntries += feeLines.length;
-        await writeCustomValues(inserted[0].id, r, customTargets);
+        await writeCustomValues(inserted[0].id, customValues);
         continue;
       }
 
@@ -589,7 +700,7 @@ async function insertRows(
     revalidatePath("/admin");
     revalidatePath("/student");
   }
-  return { ok: true, created, updated, feeEntries, unchanged, failed };
+  return { ok: true, created, updated, feeEntries, unchanged, failed, cellIssues };
 }
 
 type ExistingOutcome =
@@ -599,7 +710,15 @@ type ExistingOutcome =
 
 /**
  * Bring a student who already has an account up to date from the sheet:
- * fill/correct their admission year and post the row's fee lines.
+ * fill/correct their admission year, their custom column values, and post the
+ * row's fee lines.
+ *
+ * CUSTOM VALUES ARE PART OF THIS (new). They were not, which made re-uploading
+ * the same roster with "update existing students" ticked useless as a recovery
+ * path — the natural way to backfill the D.O.B / Year of Leaving columns that
+ * the old silent-drop bug emptied. Only values that actually DIFFER are
+ * written, so the `unchanged` count still means what it says and a re-run of an
+ * already-correct sheet stays a no-op.
  *
  * Two guards, because roll numbers are often reused across courses/years
  * ("Roll No. 1" exists in every class):
@@ -614,6 +733,7 @@ async function updateExistingStudent(
   fullName: string,
   changes: {
     admissionYear: number | undefined;
+    customValues: { fieldId: number; value: string }[];
     feeLines: FeeLine[];
     feeOptions: FeeOptions | null;
   },
@@ -644,6 +764,48 @@ async function updateExistingStudent(
       .set({ admissionYear: changes.admissionYear, updatedAt: new Date() })
       .where(eq(users.id, student.id));
     profileChanged = true;
+  }
+
+  // Custom columns: upsert only what differs from what is already stored.
+  if (changes.customValues.length > 0) {
+    const fieldIds = changes.customValues.map((v) => v.fieldId);
+    const existingValues = await db
+      .select({
+        fieldId: userFieldValues.fieldId,
+        value: userFieldValues.value,
+      })
+      .from(userFieldValues)
+      .where(
+        and(
+          eq(userFieldValues.userId, student.id),
+          inArray(userFieldValues.fieldId, fieldIds),
+        ),
+      );
+    const stored = new Map(existingValues.map((v) => [v.fieldId, v.value ?? ""]));
+    const changedValues = changes.customValues.filter(
+      (v) => stored.get(v.fieldId) !== v.value,
+    );
+    if (changedValues.length > 0) {
+      try {
+        // ONE multi-row upsert. UNIQUE(user_id, field_id) turns the conflict
+        // clause into an update, and `excluded.value` is the row SQLite was
+        // about to insert — so each row updates to its OWN new value rather
+        // than every row collapsing onto one literal.
+        await db
+          .insert(userFieldValues)
+          .values(changedValues.map((v) => ({ userId: student.id, ...v })))
+          .onConflictDoUpdate({
+            target: [userFieldValues.userId, userFieldValues.fieldId],
+            set: { value: sql`excluded.value`, updatedAt: new Date() },
+          });
+        profileChanged = true;
+      } catch (err) {
+        // Same rule as on create: a custom column never sinks the row.
+        logServerError("importStudentsFileAction.updateCustomValues", err, {
+          userId: student.id,
+        });
+      }
+    }
   }
 
   let entries = 0;
@@ -677,30 +839,25 @@ async function updateExistingStudent(
 }
 
 /**
- * Persist the mapped custom-column values for one freshly created user.
+ * Persist already-coerced custom-column values for one freshly created user.
  *
- * Each value is validated against its column's declared type (a `select` column
- * only ever stores one of its own options). Blank and invalid values are simply
- * not written — absent and blank mean the same thing to every reader, so the
- * table stays proportional to real data rather than to users x fields.
+ * NOTE THE SIGNATURE CHANGE. This used to take the raw row and do its own
+ * `validateFieldValue(...) -> continue` check, which is where every date value
+ * was being discarded without a word. Coercion and reporting now happen in the
+ * caller, BEFORE the account exists, so by the time we get here every value is
+ * already in its stored shape and an unreadable one has been accounted for.
+ * The only thing that can go wrong here is the write itself.
  */
 async function writeCustomValues(
   userId: number,
-  row: Record<string, string | undefined>,
-  customTargets: CustomField[],
+  values: { fieldId: number; value: string }[],
 ): Promise<void> {
-  const rows: { userId: number; fieldId: number; value: string }[] = [];
-
-  for (const field of customTargets) {
-    const value = (row[customColumnKey(field.key)] ?? "").trim();
-    if (!value) continue;
-    if (validateFieldValue(field, value)) continue; // type mismatch -> skip
-    rows.push({ userId, fieldId: field.id, value });
-  }
-
-  if (rows.length === 0) return;
+  if (values.length === 0) return;
   try {
-    await db.insert(userFieldValues).values(rows).onConflictDoNothing();
+    await db
+      .insert(userFieldValues)
+      .values(values.map((v) => ({ userId, ...v })))
+      .onConflictDoNothing();
   } catch (err) {
     // Never fail the import over a custom column — the account is already
     // created and correct; the extra column is simply left blank.

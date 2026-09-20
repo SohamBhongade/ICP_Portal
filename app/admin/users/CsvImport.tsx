@@ -13,8 +13,13 @@
 //   1. Drop / pick a file -> POST it to parseImportFileAction, which enforces
 //      the size / type / row / cell limits and returns sanitized headers+rows.
 //   2. Map each portal field to a column (auto-guessed, admin can adjust).
-//   3. Live validation flags malformed emails / missing mandatory fields. This
-//      is PREVIEW ONLY — the server re-checks every row on import.
+//   3. Live validation flags malformed emails / missing mandatory fields AND
+//      shows every mapped date / year / custom column RENDERED AS IT WILL BE
+//      SAVED. That preview column is the point: a date the importer cannot read
+//      is visible here, before anything is written, instead of turning into a
+//      blank cell in the grid afterwards. Preview only — the server re-checks
+//      and re-parses every row on import, using the same normalizer
+//      (lib/import/dates.ts) so the two can never disagree.
 //   4. The same File plus the mapping go to importStudentsFileAction, which
 //      RE-PARSES server-side and writes. The previewed rows are never trusted
 //      for the write, because they made a round trip through this browser.
@@ -36,7 +41,11 @@ import {
   type TargetField,
 } from "@/app/actions/import";
 import { extractYear, normalizeCourse, resolveCourse } from "@/lib/courses";
-import { customColumnKey, type CustomField } from "@/lib/user-fields";
+import {
+  coerceFieldValue,
+  customColumnKey,
+  type CustomField,
+} from "@/lib/user-fields";
 import {
   balanceToneClass,
   feeCategoriesFor,
@@ -51,8 +60,8 @@ import {
   feeLinesBalance,
   feeTargetKey,
 } from "@/lib/import/fee-columns";
-import type { RowFailure } from "@/app/actions/import";
-import { parseAdmissionYear } from "@/lib/academic-year";
+import type { CellIssue, RowFailure } from "@/app/actions/import";
+import { readAdmissionYear } from "@/lib/academic-year";
 import type { ToastKind } from "./UsersContent";
 
 /** Row shape after the operator's column mapping is applied (preview only). */
@@ -64,7 +73,38 @@ type PreviewIssue =
   | "missingRollNo"
   | "invalidEmail"
   | "invalidCourse"
-  | "invalidFee";
+  | "invalidFee"
+  /** A mapped date / year / custom cell could not be read. */
+  | "unreadableDate";
+
+/** How many rows the preview shows before the operator asks for the rest. */
+const PREVIEW_ROWS = 10;
+
+/**
+ * One mapped column whose value is TRANSFORMED on the way in, and therefore
+ * has to be previewed as it will be stored rather than as it was typed.
+ *
+ * That is every custom column (each has a declared type) plus the built-in
+ * admission year. A roll number or an email is stored verbatim, so showing the
+ * raw cell for those is already showing what will be saved.
+ */
+type ResolvedColumn = {
+  /** The mapped-row key to read. */
+  key: string;
+  label: string;
+} & (
+  | { kind: "admissionYear" }
+  | { kind: "custom"; field: CustomField }
+);
+
+/** What one such cell will actually become. */
+type ResolvedCell = {
+  raw: string;
+  /** The stored value, or "" when blank or unreadable. */
+  saved: string;
+  /** True when the cell held something we could not read. */
+  bad: boolean;
+};
 
 // A mapping target as the UI renders it. Built-ins carry an i18n key; custom
 // columns (Phase 9) carry the admin's own label verbatim.
@@ -184,6 +224,13 @@ export function CsvImport({
   const [updateExisting, setUpdateExisting] = useState(false);
   // Rows the server refused, shown after an import instead of closing blind.
   const [failures, setFailures] = useState<RowFailure[] | null>(null);
+  // Cells the server could not read, reported alongside them.
+  const [serverCellIssues, setServerCellIssues] = useState<CellIssue[]>([]);
+  // Import a row whose date/year cell is unreadable, leaving that cell blank.
+  // OFF by default — see the checkbox's own note.
+  const [allowBlankDates, setAllowBlankDates] = useState(false);
+  // The preview shows the first PREVIEW_ROWS rows; this opens it up.
+  const [showAllRows, setShowAllRows] = useState(false);
 
   // Built-ins plus whatever custom columns exist right now.
   const targets = useMemo(() => buildTargets(customFields), [customFields]);
@@ -258,6 +305,79 @@ export function CsvImport({
     });
   }, [rows, mapping, customFields]);
 
+  // --- What the transformed columns will actually store --------------------
+  //
+  // THIS IS THE FIX'S VISIBLE HALF. Every mapped column whose value is parsed
+  // rather than stored verbatim gets previewed through the SAME functions the
+  // server writes with, so a cell the importer cannot read is impossible to
+  // miss: it is red, in the table, with the raw text beside it, before anything
+  // is committed. The old behaviour was to drop such a value without a word.
+  const resolvedColumns = useMemo<ResolvedColumn[]>(() => {
+    const columns: ResolvedColumn[] = [];
+    if (mapping.admissionYear) {
+      columns.push({
+        kind: "admissionYear",
+        key: "admissionYear",
+        label: t("onboarding.csv.fieldAdmissionYear"),
+      });
+    }
+    for (const field of customFields) {
+      const key = customColumnKey(field.key);
+      if (!mapping[key]) continue;
+      columns.push({ kind: "custom", key, label: field.label, field });
+    }
+    return columns;
+  }, [mapping, customFields, t]);
+
+  const resolvedCells = useMemo<ResolvedCell[][]>(
+    () =>
+      mapped.map((row) =>
+        resolvedColumns.map((column) => {
+          const raw = (row[column.key] ?? "").trim();
+          if (column.kind === "admissionYear") {
+            const out = readAdmissionYear(raw);
+            return {
+              raw,
+              saved: out.ok && out.value != null ? String(out.value) : "",
+              bad: !out.ok,
+            };
+          }
+          const out = coerceFieldValue(column.field, raw);
+          return { raw, saved: out.ok ? out.value : "", bad: !out.ok };
+        }),
+      ),
+    [mapped, resolvedColumns],
+  );
+
+  /** Rows holding at least one cell we could not read. */
+  const rowHasBadCell = useMemo(
+    () => resolvedCells.map((cells) => cells.some((c) => c.bad)),
+    [resolvedCells],
+  );
+
+  /**
+   * Per-COLUMN roll-up of the per-row failures: "3 rows: couldn't read Year of
+   * Leaving — for example 45231". A flat list of 300 identical row errors is
+   * not a report; the column and a sample of the raw values are what tell the
+   * operator which spreadsheet column to go and fix.
+   */
+  const cellIssueSummary = useMemo(() => {
+    const byColumn = new Map<string, { count: number; samples: string[] }>();
+    resolvedCells.forEach((cells) => {
+      cells.forEach((cell, c) => {
+        if (!cell.bad) return;
+        const label = resolvedColumns[c].label;
+        const entry = byColumn.get(label) ?? { count: 0, samples: [] };
+        entry.count++;
+        if (cell.raw && entry.samples.length < 3 && !entry.samples.includes(cell.raw)) {
+          entry.samples.push(cell.raw);
+        }
+        byColumn.set(label, entry);
+      });
+    });
+    return Array.from(byColumn, ([column, v]) => ({ column, ...v }));
+  }, [resolvedCells, resolvedColumns]);
+
   // Fee categories the operator has actually mapped to a column.
   const mappedFeeTargets = useMemo(
     () => (canPostFees ? FEE_TARGETS.filter((f) => mapping[f.key]) : []),
@@ -289,9 +409,13 @@ export function CsvImport({
       if (row.email && !EMAIL_RE.test(row.email)) return "invalidEmail";
       if (resolveCourse(row.course).status === "invalid") return "invalidCourse";
       if (!feeResults[i]?.ok) return "invalidFee";
+      // An unreadable date is a ROW error by default rather than a shrug. The
+      // operator can downgrade it with the "import anyway" checkbox, having
+      // seen in the table above exactly which cells that affects.
+      if (!allowBlankDates && rowHasBadCell[i]) return "unreadableDate";
       return null;
     });
-  }, [mapped, feeResults]);
+  }, [mapped, feeResults, rowHasBadCell, allowBlankDates]);
 
   // The canonical course each row will actually be saved as ("" when none).
   const resolvedCourses: string[] = useMemo(
@@ -320,10 +444,19 @@ export function CsvImport({
     () => mapped.filter((_, i) => validations[i] === null),
     [mapped, validations],
   );
+
+  /** The rows the preview table actually renders. */
+  const visibleRows = useMemo(
+    () => (showAllRows ? mapped : mapped.slice(0, PREVIEW_ROWS)),
+    [mapped, showAllRows],
+  );
   const invalidCount = rows.length - validRows.length;
 
   const reset = () => {
     setFailures(null);
+    setServerCellIssues([]);
+    setAllowBlankDates(false);
+    setShowAllRows(false);
     setFile(null);
     setFileName(null);
     setHeaders([]);
@@ -358,6 +491,7 @@ export function CsvImport({
         );
       }
       if (updateExisting) body.append("updateExisting", "true");
+      if (allowBlankDates) body.append("allowBlankDates", "true");
       const result = await importStudentsFileAction(body);
       if (!result.ok) {
         notify("error", importErrorMessage(result.error, result.retryAfter));
@@ -382,12 +516,25 @@ export function CsvImport({
         message +=
           " " + t("onboarding.toast.feesPosted", { entries: result.feeEntries });
       }
-      notify("success", message);
+      // A cell that went in blank is stated in the SAME breath as the success,
+      // never left for the operator to notice in the grid three days later.
+      if (result.cellIssues.length > 0) {
+        message +=
+          " " +
+          t("onboarding.csv.importedBlank", {
+            count: result.cellIssues.length,
+          });
+      }
+      notify(
+        result.cellIssues.length > 0 ? "error" : "success",
+        message,
+      );
       router.refresh();
-      // Keep the dialog open on partial failure so the operator can see
-      // exactly which rows were skipped and why.
-      if (result.failed.length > 0) {
+      // Keep the dialog open on any partial outcome so the operator can see
+      // exactly which rows were skipped, or which cells arrived empty, and why.
+      if (result.failed.length > 0 || result.cellIssues.length > 0) {
         setFailures(result.failed);
+        setServerCellIssues(result.cellIssues);
         return;
       }
       onClose();
@@ -636,25 +783,57 @@ export function CsvImport({
                 </span>
               </label>
 
-              {/* Rows the server refused on the last import attempt. */}
-              {failures && failures.length > 0 && (
+              {/* Rows the server refused on the last import attempt, and any
+                  cell it had to leave blank. Both name the column and quote the
+                  raw text, because "3 rows failed" is not something an operator
+                  can act on. */}
+              {((failures && failures.length > 0) ||
+                serverCellIssues.length > 0) && (
                 <section className="rounded-md border border-danger/40 bg-lavender/40 p-3">
-                  <h3 className="mb-2 text-sm font-semibold text-danger">
-                    {t("onboarding.csv.failuresTitle", { count: failures.length })}
-                  </h3>
-                  <ul className="max-h-40 overflow-auto text-xs text-ink">
-                    {failures.map((f) => (
-                      <li key={f.row}>
-                        {t("onboarding.csv.rowLabel")} {f.row}:{" "}
-                        {t(`onboarding.errors.${f.reason}`)}
-                        {f.detail ? ` (${f.detail})` : ""}
-                      </li>
-                    ))}
-                  </ul>
+                  {failures && failures.length > 0 && (
+                    <>
+                      <h3 className="mb-2 text-sm font-semibold text-danger">
+                        {t("onboarding.csv.failuresTitle", {
+                          count: failures.length,
+                        })}
+                      </h3>
+                      <ul className="mb-3 max-h-40 overflow-auto text-xs text-ink">
+                        {failures.map((f) => (
+                          <li key={f.row}>
+                            {t("onboarding.csv.rowLabel")} {f.row}:{" "}
+                            {f.reason === "unreadableDate"
+                              ? t("onboarding.errors.unreadableDate", {
+                                  column: f.column ?? "",
+                                  raw: f.raw ? `"${f.raw}"` : "—",
+                                })
+                              : t(`onboarding.errors.${f.reason}`)}
+                            {f.reason !== "unreadableDate" && f.detail
+                              ? ` (${f.detail})`
+                              : ""}
+                          </li>
+                        ))}
+                      </ul>
+                    </>
+                  )}
+                  {serverCellIssues.length > 0 && (
+                    <>
+                      <h3 className="mb-1 text-sm font-semibold text-danger">
+                        {t("onboarding.csv.cellIssuesTitle")}
+                      </h3>
+                      <ul className="max-h-40 overflow-auto text-xs text-ink">
+                        {serverCellIssues.map((issue, i) => (
+                          <li key={`${issue.row}-${issue.column}-${i}`}>
+                            {t("onboarding.csv.rowLabel")} {issue.row} —{" "}
+                            {issue.column}: &quot;{issue.raw}&quot;
+                          </li>
+                        ))}
+                      </ul>
+                    </>
+                  )}
                 </section>
               )}
 
-              {/* Step 3: preview + validation */}
+              {/* Step 3: preview — what will actually be stored */}
               <section>
                 <div className="mb-2 flex flex-wrap items-center gap-3">
                   <h3 className="text-sm font-semibold text-ink">
@@ -671,8 +850,54 @@ export function CsvImport({
                     </span>
                   )}
                 </div>
+                <p className="mb-3 text-xs text-muted">
+                  {t("onboarding.csv.previewHint", { count: PREVIEW_ROWS })}
+                </p>
 
-                <div className="max-h-64 overflow-auto rounded-md border border-line">
+                {/* PER-COLUMN failure summary. This is the report the operator
+                    acts on: which column, how many rows, and what the offending
+                    cells actually say. */}
+                {cellIssueSummary.length > 0 && (
+                  <div className="mb-3 rounded-md border border-danger/40 bg-lavender/40 p-3">
+                    <h4 className="text-sm font-semibold text-danger">
+                      {t("onboarding.csv.cellIssuesTitle")}
+                    </h4>
+                    <ul className="mt-1 text-xs text-ink">
+                      {cellIssueSummary.map((entry) => (
+                        <li key={entry.column}>
+                          {t("onboarding.csv.cellIssueLine", {
+                            count: entry.count,
+                            column: entry.column,
+                            raw: entry.samples
+                              .map((x) => `"${x}"`)
+                              .join(", "),
+                          })}
+                        </li>
+                      ))}
+                    </ul>
+                    <p className="mt-2 text-xs text-muted">
+                      {t("onboarding.csv.cellIssuesHint")}
+                    </p>
+                    <label className="mt-3 flex items-start gap-2 text-xs text-ink">
+                      <input
+                        type="checkbox"
+                        checked={allowBlankDates}
+                        onChange={(e) => setAllowBlankDates(e.target.checked)}
+                        className="mt-0.5"
+                      />
+                      <span>
+                        <span className="font-medium">
+                          {t("onboarding.csv.allowBlankDates")}
+                        </span>
+                        <span className="block text-muted">
+                          {t("onboarding.csv.allowBlankDatesHint")}
+                        </span>
+                      </span>
+                    </label>
+                  </div>
+                )}
+
+                <div className="dt-scroll max-h-72 rounded-md border border-line">
                   <table className="w-full min-w-[560px] text-left text-xs">
                     <thead className="sticky top-0 bg-canvas text-muted">
                       <tr className="border-b border-line">
@@ -692,11 +917,20 @@ export function CsvImport({
                           {t("onboarding.csv.fieldCourse")}
                         </th>
                         <th className="px-3 py-2 font-medium">
-                          {t("onboarding.csv.fieldAdmissionYear")}
-                        </th>
-                        <th className="px-3 py-2 font-medium">
                           {t("onboarding.csv.fieldYear")}
                         </th>
+                        {/* One column per mapped field whose value is
+                            transformed on the way in — each shows the STORED
+                            value, not the raw cell. */}
+                        {resolvedColumns.map((column) => (
+                          <th
+                            key={column.key}
+                            className="whitespace-nowrap px-3 py-2 font-medium"
+                            title={`${column.label} — ${t("onboarding.csv.colWillSave")}`}
+                          >
+                            {column.label}
+                          </th>
+                        ))}
                         {mappedFeeTargets.length > 0 && (
                           <th className="px-3 py-2 text-right font-medium">
                             {t("onboarding.csv.fieldFeeBalance")}
@@ -708,7 +942,7 @@ export function CsvImport({
                       </tr>
                     </thead>
                     <tbody>
-                      {mapped.map((row, i) => {
+                      {visibleRows.map((row, i) => {
                         const err = validations[i];
                         return (
                           <tr
@@ -739,11 +973,32 @@ export function CsvImport({
                               )}
                             </td>
                             <td className="px-3 py-1.5 text-muted">
-                              {parseAdmissionYear(row.admissionYear) ?? "—"}
-                            </td>
-                            <td className="px-3 py-1.5 text-muted">
                               {resolvedYears[i] || "—"}
                             </td>
+                            {resolvedCells[i]?.map((cell, c) => (
+                              <td
+                                key={resolvedColumns[c].key}
+                                className="whitespace-nowrap px-3 py-1.5"
+                              >
+                                {cell.bad ? (
+                                  // The raw text is shown, not hidden behind a
+                                  // generic error: the operator needs to see
+                                  // "45231" to understand what to fix.
+                                  <span
+                                    className="font-medium text-danger"
+                                    title={t("onboarding.csv.unreadable")}
+                                  >
+                                    {cell.raw}
+                                  </span>
+                                ) : cell.saved ? (
+                                  <span className="text-ink [font-variant-numeric:tabular-nums]">
+                                    {cell.saved}
+                                  </span>
+                                ) : (
+                                  <span className="text-muted">—</span>
+                                )}
+                              </td>
+                            ))}
                             {mappedFeeTargets.length > 0 && (
                               <FeeBalanceCell result={feeResults[i]} />
                             )}
@@ -763,6 +1018,32 @@ export function CsvImport({
                       })}
                     </tbody>
                   </table>
+                </div>
+
+                {/* ~10 rows by default. A 2000-row scroll box is not a check
+                    anyone performs; ten rows is. The rest is one click away. */}
+                <div className="mt-2 flex flex-wrap items-center gap-3">
+                  <p className="text-xs text-muted">
+                    {t("onboarding.csv.previewNote", {
+                      shown: visibleRows.length,
+                      total: mapped.length,
+                    })}
+                  </p>
+                  {mapped.length > PREVIEW_ROWS && (
+                    <button
+                      type="button"
+                      onClick={() => setShowAllRows((open) => !open)}
+                      className="cursor-pointer text-xs font-medium text-teal underline-offset-2 hover:underline"
+                    >
+                      {showAllRows
+                        ? t("onboarding.csv.previewShowFewer", {
+                            count: PREVIEW_ROWS,
+                          })
+                        : t("onboarding.csv.previewShowAll", {
+                            count: mapped.length,
+                          })}
+                    </button>
+                  )}
                 </div>
               </section>
             </>

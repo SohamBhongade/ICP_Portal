@@ -13,9 +13,40 @@
 // label. `slugifyFieldKey` is therefore a create-time function, never a
 // rename-time one.
 
-/** Value types a custom column can declare. */
-export const USER_FIELD_TYPES = ["text", "number", "date", "select"] as const;
+import {
+  MAX_YEAR,
+  MIN_YEAR,
+  normalizeDateCell,
+  normalizeYearCell,
+  type DateIssue,
+} from "./import/dates";
+
+/**
+ * Value types a custom column can declare.
+ *
+ * `year` was added alongside the import date fix. A column like "Year of
+ * Leaving" is conceptually a YEAR, not a timestamp: a spreadsheet cell reading
+ * "2024" or "2024-25" had nowhere valid to go on a `date` column, which demands
+ * a full YYYY-MM-DD, so every such value was being dropped. A `year` column
+ * stores the bare integer as text ("2024") and accepts academic-year notation.
+ *
+ * SQLite stores this enum as plain text and user_field_values.value is TEXT for
+ * every type, so widening the union needs no DDL — only db/migrate-user-field-
+ * year-type.ts, which flips the two existing year columns over.
+ */
+export const USER_FIELD_TYPES = [
+  "text",
+  "number",
+  "date",
+  "year",
+  "select",
+] as const;
 export type UserFieldType = (typeof USER_FIELD_TYPES)[number];
+
+/** Field types whose raw spreadsheet cell needs date/year normalization. */
+export function isDateLikeType(type: UserFieldType): boolean {
+  return type === "date" || type === "year";
+}
 
 export const USER_FIELD_LIMITS = {
   /** Custom columns per installation. Bounds the grid width, the per-page join,
@@ -113,6 +144,7 @@ export type FieldValueIssue =
   | "tooLong"
   | "notNumber"
   | "notDate"
+  | "notYear"
   | "notAnOption";
 
 export function validateFieldValue(
@@ -127,7 +159,9 @@ export function validateFieldValue(
     case "number":
       return Number.isFinite(Number(value)) ? null : "notNumber";
     case "date":
-      // Strict YYYY-MM-DD, and the date must actually exist.
+      // Strict YYYY-MM-DD, and the date must actually exist. This is the
+      // STORAGE contract, not the input contract — anything a human or a
+      // spreadsheet typed goes through coerceFieldValue first.
       if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return "notDate";
       {
         const [y, m, d] = value.split("-").map(Number);
@@ -138,9 +172,57 @@ export function validateFieldValue(
           dt.getUTCDate() === d;
         return real ? null : "notDate";
       }
+    case "year": {
+      // Stored as the bare 4-digit year, nothing else.
+      if (!/^\d{4}$/.test(value)) return "notYear";
+      const n = Number(value);
+      return n >= MIN_YEAR && n <= MAX_YEAR ? null : "notYear";
+    }
     case "select":
       return field.options?.includes(value) ? null : "notAnOption";
     case "text":
       return null;
   }
+}
+
+/**
+ * Turn whatever a human or a spreadsheet supplied into the value we will STORE,
+ * or say precisely why we can't.
+ *
+ * This is the function every write path must use. `validateFieldValue` alone
+ * was the bug: it is a storage-shape check, so an Excel serial ("45231") or a
+ * typed "03/04/2005" failed it, and the import's response to a failure was to
+ * skip the cell in silence. Coercion first, and a REPORTED issue when coercion
+ * fails, is what closes that hole.
+ *
+ * Returns `{ ok: true, value: "" }` for a blank cell — absent and blank mean the
+ * same thing for a custom column, and callers delete rather than store "".
+ */
+export type CoerceResult =
+  | { ok: true; value: string }
+  | { ok: false; issue: FieldValueIssue; detail?: DateIssue };
+
+export function coerceFieldValue(
+  field: Pick<CustomField, "type" | "options">,
+  raw: unknown,
+): CoerceResult {
+  const value = typeof raw === "string" ? raw.trim() : raw;
+  if (value == null || value === "") return { ok: true, value: "" };
+
+  if (field.type === "date") {
+    const out = normalizeDateCell(value);
+    if (!out.ok) return { ok: false, issue: "notDate", detail: out.issue };
+    return { ok: true, value: out.value ?? "" };
+  }
+
+  if (field.type === "year") {
+    const out = normalizeYearCell(value);
+    if (!out.ok) return { ok: false, issue: "notYear", detail: out.issue };
+    return { ok: true, value: out.value == null ? "" : String(out.value) };
+  }
+
+  // Everything else stores the trimmed text verbatim; validate as before.
+  const text = String(value).trim();
+  const issue = validateFieldValue(field, text);
+  return issue ? { ok: false, issue } : { ok: true, value: text };
 }

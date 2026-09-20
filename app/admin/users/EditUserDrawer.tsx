@@ -27,9 +27,14 @@ import {
 import { setUserFieldValueAction } from "@/app/actions/user-fields";
 import { parseAdmissionYear } from "@/lib/academic-year";
 import {
-  validateFieldValue,
+  coerceFieldValue,
   type CustomField,
 } from "@/lib/user-fields";
+import {
+  CustomFieldInput,
+  YearInput,
+  inputClass,
+} from "./FieldInputs";
 import type { ToastKind, UserRow } from "./UsersContent";
 
 // Translation keys per role (mirrors ROLE_LABEL in UsersContent).
@@ -140,13 +145,15 @@ export function EditUserDrawer({
   const setCustom = (key: string, value: string) =>
     setCustomValues((prev) => ({ ...prev, [key]: value }));
 
-  // Client-side type check, mirroring validateFieldValue on the server so the
-  // drawer never submits something the action will reject.
+  // Client-side type check, mirroring the server so the drawer never submits
+  // something the action will reject. `coerceFieldValue`, not
+  // `validateFieldValue`: coercion is what the write path actually applies, so
+  // checking anything narrower here would flag values that would in fact save.
   const customIssue = customFields
-    .map((f) => ({
-      field: f,
-      issue: validateFieldValue(f, customValues[f.key] ?? ""),
-    }))
+    .map((f) => {
+      const result = coerceFieldValue(f, customValues[f.key] ?? "");
+      return { field: f, issue: result.ok ? null : result.issue };
+    })
     .find((r) => r.issue);
 
   const submit = (e: React.FormEvent) => {
@@ -324,22 +331,11 @@ export function EditUserDrawer({
                 htmlFor="eu-admission"
                 optional={t("onboarding.create.optional")}
               >
-                <input
+                <YearInput
                   id="eu-admission"
-                  inputMode="numeric"
                   value={admissionYear}
-                  onChange={(e) => setAdmissionYear(e.target.value)}
-                  placeholder={t("onboarding.create.admissionYearPlaceholder")}
-                  aria-invalid={admissionYearInvalid}
-                  className={inputClass}
+                  onChange={setAdmissionYear}
                 />
-                <p
-                  className={`mt-1 text-xs ${admissionYearInvalid ? "text-danger" : "text-muted"}`}
-                >
-                  {admissionYearInvalid
-                    ? t("onboarding.create.admissionYearInvalid")
-                    : t("onboarding.create.admissionYearHint")}
-                </p>
               </Field>
               <Field label={t("onboarding.create.practicalBatch")}>
                 <EditableDropdown
@@ -385,37 +381,12 @@ export function EditUserDrawer({
                   label={field.label}
                   htmlFor={`eu-custom-${field.id}`}
                 >
-                  {field.type === "select" ? (
-                    <select
-                      id={`eu-custom-${field.id}`}
-                      value={customValues[field.key] ?? ""}
-                      onChange={(e) => setCustom(field.key, e.target.value)}
-                      className={inputClass}
-                    >
-                      <option value="">
-                        {t("onboarding.create.selectPlaceholder")}
-                      </option>
-                      {(field.options ?? []).map((o) => (
-                        <option key={o} value={o}>
-                          {o}
-                        </option>
-                      ))}
-                    </select>
-                  ) : (
-                    <input
-                      id={`eu-custom-${field.id}`}
-                      type={
-                        field.type === "date"
-                          ? "date"
-                          : field.type === "number"
-                            ? "number"
-                            : "text"
-                      }
-                      value={customValues[field.key] ?? ""}
-                      onChange={(e) => setCustom(field.key, e.target.value)}
-                      className={inputClass}
-                    />
-                  )}
+                  <CustomFieldInput
+                    id={`eu-custom-${field.id}`}
+                    field={field}
+                    value={customValues[field.key] ?? ""}
+                    onChange={(next) => setCustom(field.key, next)}
+                  />
                 </Field>
               ))}
             </div>
@@ -459,9 +430,6 @@ export function EditUserDrawer({
     </div>
   );
 }
-
-const inputClass =
-  "w-full rounded-md border border-line bg-surface px-3 py-2 text-sm text-ink focus:border-teal";
 
 function Field({
   label,

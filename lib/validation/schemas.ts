@@ -183,6 +183,57 @@ export const bulkDeleteUsersSchema = z
   .max(BULK_DELETE_MAX)
   .transform((ids) => Array.from(new Set(ids)));
 
+/**
+ * Accounts one bulk FIELD EDIT may address.
+ *
+ * Higher than BULK_DELETE_MAX because a field edit is reversible (re-run it
+ * with the old value) whereas a delete is not, and because reassigning a whole
+ * cohort's class is a normal registrar task. Still bounded: the action resolves
+ * every id before writing, so an unbounded array would be an unbounded read.
+ */
+export const BULK_UPDATE_MAX = 500;
+
+/**
+ * bulkUpdateUsersAction — the id list plus ONE field change.
+ *
+ * A discriminated union rather than a partial user object, deliberately: this
+ * endpoint may only ever set the single field the operator picked in the UI. A
+ * free-form patch would let a forged payload sweep `status` or `role` across
+ * hundreds of accounts in one call, which is precisely the blast radius a bulk
+ * endpoint must not have.
+ *
+ * `value` is the RAW text the operator typed or picked; the action coerces and
+ * validates it (course normalization, year parsing, custom-column type check).
+ * An empty string means "clear this field".
+ */
+export const bulkUpdateUsersSchema = z.strictObject({
+  ids: z
+    .array(dbId)
+    .min(1)
+    .max(BULK_UPDATE_MAX)
+    .transform((ids) => Array.from(new Set(ids))),
+  change: z.discriminatedUnion("field", [
+    z.strictObject({
+      field: z.literal("className"),
+      value: safeText(LIMITS.shortText),
+    }),
+    z.strictObject({
+      field: z.literal("course"),
+      value: safeText(LIMITS.shortText),
+    }),
+    z.strictObject({
+      field: z.literal("admissionYear"),
+      value: safeText(LIMITS.shortText),
+    }),
+    z.strictObject({
+      field: z.literal("custom"),
+      /** Which admin-defined column. Re-resolved server-side against user_fields. */
+      fieldId: dbId,
+      value: safeText(USER_FIELD_LIMITS.maxValue),
+    }),
+  ]),
+});
+
 // ---------------------------------------------------------------------------
 // user-fields.ts — admin-defined columns on the Users grid
 // ---------------------------------------------------------------------------

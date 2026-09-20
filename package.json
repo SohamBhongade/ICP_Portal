@@ -15,7 +15,9 @@
     "db:create-admin": "tsx db/create-admin.ts",
     "db:migrate-rate-limits": "tsx db/migrate-rate-limits.ts",
     "db:migrate-phase9": "tsx db/migrate-phase9.ts",
-    "db:migrate-admission-year": "tsx db/migrate-admission-year.ts"
+    "db:migrate-admission-year": "tsx db/migrate-admission-year.ts",
+    "db:migrate-field-year-type": "tsx db/migrate-user-field-year-type.ts",
+    "test": "node --import tsx --test \"tests/**/*.test.ts\""
   },
   "dependencies": {
     "@libsql/client": "^0.17.4",

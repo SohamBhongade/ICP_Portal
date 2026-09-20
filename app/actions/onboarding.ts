@@ -31,21 +31,25 @@ import {
   feeLedgers,
   supportTickets,
   userFieldValues,
+  userFields,
   users,
 } from "@/db/schema";
 import { currentUserWithCapability } from "@/lib/auth";
 import { canAssignRole, type Role } from "@/lib/auth/permissions";
 import { extractYear, normalizeCourse, resolveCourse } from "@/lib/courses";
+import { parseAdmissionYear } from "@/lib/academic-year";
 import { logServerError } from "@/lib/errors";
 import { RULES, checkRateLimit } from "@/lib/rate-limit";
 import { parseInput, type FieldErrors } from "@/lib/validation/core";
 import {
   approveRequestSchema,
   bulkDeleteUsersSchema,
+  bulkUpdateUsersSchema,
   createUserSchema,
   idSchema,
   updateUserSchema,
 } from "@/lib/validation/schemas";
+import { coerceFieldValue, type UserFieldType } from "@/lib/user-fields";
 
 /**
  * Derive the canonical course + academic year for a student from the raw course
@@ -742,6 +746,250 @@ export async function bulkDeleteUsersAction(
   }
 
   return { ok: true, deleted, failed };
+}
+
+// ---------- Bulk field edit (manageUsers) ----------
+//
+// The "Change class / course / year of admission / <custom column>" actions on
+// the Users grid's selection bar.
+//
+// ONE FIELD, ONE STATEMENT. The payload names exactly one field (a
+// discriminated union — see bulkUpdateUsersSchema for why a free-form patch
+// would be a hole), and the write goes out as a SINGLE UPDATE ... WHERE id IN
+// (...), or a single batched upsert for a custom column. That is the "bulk
+// endpoint" the UI prefers over N round trips: 200 students reassigned to a new
+// class is one statement, not 200.
+//
+// PARTIAL SUCCESS IS REPORTED, NOT SWALLOWED. The three built-in fields belong
+// to STUDENTS only — updateUserAction already refuses to put a course on a
+// staff account, and this must not be the back door that does. So a selection
+// containing staff updates the students and returns the staff rows in
+// `skipped`, with a reason, rather than failing the batch or silently dropping
+// them.
+//
+// Gate: `manageUsers`, the same capability the per-row Edit drawer uses. Bulk
+// editing is the same operation at scale, so it gets the same gate — not the
+// stricter `deleteUsers` one, which exists because deletion is irreversible.
+
+export type BulkUpdateField =
+  | { field: "className"; value: string }
+  | { field: "course"; value: string }
+  | { field: "admissionYear"; value: string }
+  | { field: "custom"; fieldId: number; value: string };
+
+export type BulkUpdateInput = {
+  ids: number[];
+  change: BulkUpdateField;
+};
+
+export type BulkUpdateSkip = {
+  id: number;
+  name: string;
+  /** `notStudent`: a staff account can't hold a course / class / admission year. */
+  reason: "notFound" | "notStudent";
+};
+
+export type BulkUpdateResult =
+  | {
+      ok: true;
+      /** Accounts actually written. */
+      updated: number;
+      /** Accounts deliberately left alone, with the reason for each. */
+      skipped: BulkUpdateSkip[];
+      /** The canonical value that was stored, for the confirmation message. */
+      appliedValue: string;
+    }
+  | {
+      ok: false;
+      error:
+        | "forbidden"
+        | "validation"
+        | "rateLimited"
+        | "invalidCourse"
+        | "invalidYear"
+        | "badValue"
+        | "notFound"
+        | "unknown";
+      retryAfter?: number;
+    };
+
+export async function bulkUpdateUsersAction(
+  input: BulkUpdateInput,
+): Promise<BulkUpdateResult> {
+  const actor = await assertManageUsers();
+  if (!actor) return { ok: false, error: "forbidden" };
+
+  const parsed = parseInput(bulkUpdateUsersSchema, input);
+  if (!parsed.ok) return { ok: false, error: "validation" };
+  const { ids, change } = parsed.data;
+
+  const limit = await checkRateLimit(RULES.bulkUpdateUsers, String(actor.id));
+  if (!limit.allowed) {
+    return { ok: false, error: "rateLimited", retryAfter: limit.retryAfter };
+  }
+
+  // Resolve the targets from the DB. The client's idea of who is a student is
+  // not evidence, and the reason strings below have to name real accounts.
+  const targets = await db
+    .select({ id: users.id, fullName: users.fullName, role: users.role })
+    .from(users)
+    .where(inArray(users.id, ids));
+  const byId = new Map(targets.map((u) => [u.id, u]));
+
+  const skipped: BulkUpdateSkip[] = [];
+  const eligible: number[] = [];
+  for (const id of ids) {
+    const target = byId.get(id);
+    if (!target) {
+      skipped.push({ id, name: String(id), reason: "notFound" });
+      continue;
+    }
+    // Course / class / admission year are student fields. A custom column is
+    // not — an admin may want "Department" on staff — so it has no such guard.
+    if (change.field !== "custom" && target.role !== "student") {
+      skipped.push({ id, name: target.fullName, reason: "notStudent" });
+      continue;
+    }
+    eligible.push(id);
+  }
+
+  if (eligible.length === 0) {
+    return { ok: true, updated: 0, skipped, appliedValue: "" };
+  }
+
+  try {
+    const applied =
+      change.field === "custom"
+        ? await applyBulkCustomValue(eligible, change.fieldId, change.value)
+        : await applyBulkBuiltIn(eligible, change);
+    if (!applied.ok) return applied;
+
+    revalidatePath("/admin/users");
+    revalidatePath("/admin");
+    return {
+      ok: true,
+      updated: eligible.length,
+      skipped,
+      appliedValue: applied.appliedValue,
+    };
+  } catch (err) {
+    logServerError("bulkUpdateUsersAction", err, {
+      field: change.field,
+      count: eligible.length,
+    });
+    return { ok: false, error: "unknown" };
+  }
+}
+
+type ApplyOutcome =
+  | { ok: true; appliedValue: string }
+  | Extract<BulkUpdateResult, { ok: false }>;
+
+/**
+ * Write one built-in student field across the whole selection, in one UPDATE.
+ *
+ * The derived `year` (year of study) is kept in step with course/class exactly
+ * as updateUserAction and the import do — but only when the new value actually
+ * yields one. Blanking a cohort's year of study because their new class text
+ * happens not to contain "First"/"Second" would be a silent data loss, so an
+ * indeterminate result leaves the existing value alone.
+ */
+async function applyBulkBuiltIn(
+  ids: number[],
+  change: Exclude<BulkUpdateField, { field: "custom" }>,
+): Promise<ApplyOutcome> {
+  const raw = change.value.trim();
+  const patch: Record<string, unknown> = { updatedAt: new Date() };
+  let appliedValue = "";
+
+  if (change.field === "course") {
+    if (!raw) {
+      patch.course = null;
+    } else {
+      const resolved = resolveCourse(raw);
+      if (resolved.status === "invalid") {
+        return { ok: false, error: "invalidCourse" };
+      }
+      const norm = normalizeCourse(raw);
+      patch.course = norm.course ?? null;
+      if (norm.year != null) patch.year = norm.year;
+      appliedValue = norm.course ?? "";
+    }
+  } else if (change.field === "className") {
+    patch.className = raw || null;
+    const derived = extractYear(raw).year;
+    if (derived != null) patch.year = derived;
+    appliedValue = raw;
+  } else {
+    // admissionYear — "2024-25" and Excel serials resolve like everywhere else.
+    if (!raw) {
+      patch.admissionYear = null;
+    } else {
+      const year = parseAdmissionYear(raw);
+      if (year == null) return { ok: false, error: "invalidYear" };
+      patch.admissionYear = year;
+      appliedValue = String(year);
+    }
+  }
+
+  await db.update(users).set(patch).where(inArray(users.id, ids));
+  return { ok: true, appliedValue };
+}
+
+/**
+ * Write one custom column's value across the whole selection.
+ *
+ * The field's TYPE comes from the database, never the payload, and the value
+ * goes through the same `coerceFieldValue` the import uses — so "2024-25" typed
+ * into a bulk Year of Leaving edit stores 2024, exactly as it would from a
+ * spreadsheet. An empty value DELETES the rows, matching the single-cell action:
+ * absent and blank mean the same thing for a custom column.
+ */
+async function applyBulkCustomValue(
+  ids: number[],
+  fieldId: number,
+  rawValue: string,
+): Promise<ApplyOutcome> {
+  const [field] = await db
+    .select({
+      id: userFields.id,
+      type: userFields.type,
+      options: userFields.options,
+    })
+    .from(userFields)
+    .where(and(eq(userFields.id, fieldId), eq(userFields.isActive, true)))
+    .limit(1);
+  if (!field) return { ok: false, error: "notFound" };
+
+  const coerced = coerceFieldValue(
+    { type: field.type as UserFieldType, options: field.options ?? null },
+    rawValue,
+  );
+  if (!coerced.ok) return { ok: false, error: "badValue" };
+
+  if (!coerced.value) {
+    await db
+      .delete(userFieldValues)
+      .where(
+        and(
+          inArray(userFieldValues.userId, ids),
+          eq(userFieldValues.fieldId, fieldId),
+        ),
+      );
+    return { ok: true, appliedValue: "" };
+  }
+
+  // One multi-row upsert. UNIQUE(user_id, field_id) is what makes the conflict
+  // clause an update rather than a duplicate-key failure.
+  await db
+    .insert(userFieldValues)
+    .values(ids.map((userId) => ({ userId, fieldId, value: coerced.value })))
+    .onConflictDoUpdate({
+      target: [userFieldValues.userId, userFieldValues.fieldId],
+      set: { value: coerced.value, updatedAt: new Date() },
+    });
+
+  return { ok: true, appliedValue: coerced.value };
 }
 
 export async function rejectRequestAction(

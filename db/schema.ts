@@ -223,8 +223,11 @@ export const userFields = sqliteTable("user_fields", {
   key: text("key").notNull().unique(), // immutable machine key
   label: text("label").notNull(), // mutable display name
   // A display + validation contract enforced in TS, NOT a storage type — see
-  // the note on `value` below.
-  type: text("type", { enum: ["text", "number", "date", "select"] })
+  // the note on `value` below. `year` stores a bare 4-digit year and exists
+  // because "Year of Leaving" is not a timestamp; see lib/user-fields.ts.
+  // Widening this list needs no DDL (SQLite stores it as text), only a data
+  // migration for rows that should change type — db/migrate-user-field-year-type.ts.
+  type: text("type", { enum: ["text", "number", "date", "year", "select"] })
     .notNull()
     .default("text"),
   // Permitted values when type = 'select'; null for every other type.

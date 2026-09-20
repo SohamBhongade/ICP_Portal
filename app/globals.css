@@ -40,6 +40,13 @@
   --warning: #b45309;
   --danger: #b91c1c;
 
+  /* Data-grid scrollbars. Deliberately high-contrast rather than subtle —
+     see the .dt-scroll block below for why. */
+  --scrollbar-track: #e5e7eb;
+  --scrollbar-thumb: #6b7280;
+  --scrollbar-thumb-hover: #4b5563;
+  --scrollbar-size: 14px;
+
   /* Attendance chart (per spec: Absent uses purple, NOT alarming red) */
   --chart-present: #0d9488; /* teal/green */
   --chart-absent: #9333ea; /* muted purple */
@@ -133,7 +140,79 @@
   reads as a rendering artifact); the soft purple drop shadow layers on top only
   while there is actually content scrolled beneath the rail.
 */
+/*
+  ALWAYS-VISIBLE SCROLLBARS for the data grid.
+
+  Both engines default to OVERLAY scrollbars: a thin bar that fades in on hover
+  or during a scroll gesture and is otherwise invisible. For a mouse user who
+  already knows the table scrolls that is fine. For the people who actually use
+  this console — university office staff, not developers — an invisible
+  scrollbar means the table does not scroll. Half the columns (Caste through
+  Year of admission) simply do not exist to them.
+
+  So the tracks are drawn permanently and made unmistakable:
+
+    overflow: scroll (not auto)  — `auto` hides the track when content fits, so
+                                   the bar appears and disappears as rows are
+                                   filtered. `scroll` draws both tracks always,
+                                   greyed when there is nothing to scroll, which
+                                   is itself the signal that the axis exists.
+    scrollbar-gutter: stable     — reserves the space up front so nothing shifts
+                                   sideways when the thumb appears.
+    -webkit-appearance: none     — REQUIRED on macOS. Without it the system
+                                   overlay style wins and every rule below is
+                                   ignored; this is the line that makes the
+                                   difference between styled and not on a Mac.
+
+  Both engines are covered because they share nothing here: Firefox exposes only
+  `scrollbar-width` / `scrollbar-color`, Chromium and WebKit only the
+  ::-webkit-scrollbar pseudo-elements. Firefox has no width in px — `auto` is
+  its wide setting, which is the intent.
+
+  The 3px border on the thumb is the standard trick for an inset thumb: it is
+  track-coloured, so the thumb reads as a rounded pill floating inside the
+  track rather than filling it edge to edge.
+*/
 @layer components {
+  .dt-scroll {
+    overflow: scroll;
+    scrollbar-gutter: stable;
+    /* Firefox */
+    scrollbar-width: auto;
+    scrollbar-color: var(--scrollbar-thumb) var(--scrollbar-track);
+  }
+
+  /* Chromium / WebKit */
+  .dt-scroll::-webkit-scrollbar {
+    -webkit-appearance: none;
+    appearance: none;
+    width: var(--scrollbar-size);
+    height: var(--scrollbar-size);
+  }
+
+  .dt-scroll::-webkit-scrollbar-track {
+    background: var(--scrollbar-track);
+    border-radius: calc(var(--scrollbar-size) / 2);
+  }
+
+  .dt-scroll::-webkit-scrollbar-thumb {
+    background-color: var(--scrollbar-thumb);
+    border: 3px solid var(--scrollbar-track);
+    border-radius: calc(var(--scrollbar-size) / 2);
+    /* Never let the thumb shrink to an unclickable sliver on a wide table. */
+    min-height: 40px;
+    min-width: 40px;
+  }
+
+  .dt-scroll::-webkit-scrollbar-thumb:hover {
+    background-color: var(--scrollbar-thumb-hover);
+  }
+
+  /* The square where the two bars meet. Untouched it renders as a white notch. */
+  .dt-scroll::-webkit-scrollbar-corner {
+    background: var(--scrollbar-track);
+  }
+
   .dt-pin-left-edge {
     border-right: 1px solid var(--line);
   }

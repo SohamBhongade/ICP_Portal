@@ -130,7 +130,8 @@
         "text": "Text",
         "number": "Number",
         "date": "Date",
-        "select": "Choice"
+        "select": "Choice",
+        "year": "Year"
       },
       "sectionTitle": "Custom columns",
       "errSaveValue": "Could not save the {label} value.",
@@ -138,7 +139,8 @@
         "tooLong": "{label} is too long.",
         "notNumber": "{label} must be a number.",
         "notDate": "{label} must be a valid date (YYYY-MM-DD).",
-        "notAnOption": "{label} must be one of its listed choices."
+        "notAnOption": "{label} must be one of its listed choices.",
+        "notYear": "{label} must be a year, for example 2024 or 2024-25."
       }
     },
     "edit": "Edit",
@@ -194,7 +196,7 @@
       "mapTitle": "Map columns",
       "mapHint": "Match each portal field to a column from your CSV file.",
       "ignore": "— Ignore —",
-      "previewTitle": "Preview & validation",
+      "previewTitle": "Check what will be saved",
       "validRows": "{count} ready",
       "invalidRows": "{count} with errors",
       "rowLabel": "Row",
@@ -225,7 +227,8 @@
         "noHeaders": "No column headings were found. The first row must name the columns.",
         "corruptFile": "That file couldn't be opened. Re-save it and try again.",
         "feesForbidden": "You don't have permission to post fees. Remove the fee column mappings and try again.",
-        "badFeeOptions": "The fee options couldn't be read. Check the ledger date and note, then try again."
+        "badFeeOptions": "The fee options couldn't be read. Check the ledger date and note, then try again.",
+        "unreadableDate": "A date or year cell could not be read."
       },
       "customTag": "Custom",
       "feesTitle": "Fee columns → student ledger",
@@ -241,7 +244,20 @@
       "updateExistingHint": "Matched by roll number AND name. Fills in their year of admission and posts any mapped fees — entries already posted with the same date and amount are skipped, so re-uploading won't double-charge. Other details are left unchanged.",
       "fieldFeeBalance": "Fee balance",
       "failuresTitle": "{count} rows were skipped",
-      "fieldAdmissionYear": "Year of admission"
+      "fieldAdmissionYear": "Year of admission",
+      "previewHint": "These are the first {count} rows exactly as they will be stored. Check the dates and years before importing — if a column looks wrong here, it is wrong.",
+      "previewShowAll": "Show all {count} rows",
+      "previewShowFewer": "Show only the first {count} rows",
+      "previewNote": "Showing {shown} of {total} rows.",
+      "cellIssuesTitle": "Some cells could not be read",
+      "cellIssuesHint": "Nothing is ever imported blank without being listed here. Fix the file and upload it again, or import only the rows that are complete.",
+      "cellIssueLine": "{count} row(s): couldn’t read {column} — for example {raw}",
+      "allowBlankDates": "Import these rows anyway and leave the unreadable cells empty",
+      "allowBlankDatesHint": "Off by default. With this off, a row whose date or year cannot be read is skipped entirely rather than imported with the value missing.",
+      "importedBlank": "{count} cell(s) were imported blank because they could not be read.",
+      "colWillSave": "will be saved as",
+      "unreadable": "unreadable",
+      "fieldDob": "D.O.B"
     },
     "errors": {
       "missingName": "Full name is required",
@@ -257,7 +273,9 @@
       "notFound": "That account no longer exists.",
       "unknown": "Something went wrong. Please try again.",
       "invalidFee": "A fee amount isn't a valid number",
-      "nameMismatch": "Roll number exists but belongs to a student with a different name — fees not posted"
+      "nameMismatch": "Roll number exists but belongs to a student with a different name — fees not posted",
+      "unreadableDate": "Couldn’t read {column} — the cell says {raw}",
+      "unreadableDateShort": "A date or year cell could not be read"
     },
     "toast": {
       "created": "{name} was added successfully.",
@@ -283,14 +301,26 @@
       "selectAllFiltered": "Select all {count} filtered",
       "selectedCount": "{count} of {total} filtered users selected",
       "clear": "Clear selection",
-      "scopeNote": "Applies only to the {count} filtered results",
+      "scopeNote": "Applies only to the {count} users shown by your current search and filters",
       "deleteSelected": "Delete {count}",
       "confirmTitle": "Delete {count} accounts?",
       "confirmBody": "This permanently removes {count} accounts along with every support ticket, fee ledger entry, attendance record and custom column value belonging to them.",
       "irreversible": "This cannot be undone.",
-      "typeCount": "Type {count} to confirm",
       "deleted": "Deleted {count} accounts.",
-      "deletedWithErrors": "Deleted {count} accounts; {failed} could not be deleted ({names})."
+      "deletedWithErrors": "Deleted {count} accounts; {failed} could not be deleted ({names}).",
+      "barLabel": "Bulk actions for the selected users",
+      "working": "Working, please wait…",
+      "changeField": "Change {field}",
+      "changeTitle": "Change {field}",
+      "changeBody": "This sets {field} to the same value for all {count} selected users.",
+      "newValue": "New {field}",
+      "clearHint": "Leave this empty to clear {field} for everyone selected.",
+      "apply": "Apply to {count} users",
+      "applying": "Applying…",
+      "changed": "Changed {field} for {count} users.",
+      "changedWithSkips": "Changed {field} for {count} users. {skipped} were skipped because they are not students ({names}).",
+      "changeFailed": "Could not change {field}. Nothing was saved.",
+      "listLabel": "These {count} accounts will be removed:"
     },
     "colAdmissionYear": "Adm. Year",
     "filterYear": "Year of study",

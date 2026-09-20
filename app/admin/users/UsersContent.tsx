@@ -15,7 +15,6 @@ import {
   Search,
   SlidersHorizontal,
   Trash2,
-  TriangleAlert,
   Upload,
   X,
 } from "lucide-react";
@@ -24,6 +23,7 @@ import { Editable } from "@/components/edit-mode/Editable";
 import type { DropdownOptionItem } from "@/components/edit-mode/EditableDropdown";
 import {
   bulkDeleteUsersAction,
+  bulkUpdateUsersAction,
   deleteUserAction,
 } from "@/app/actions/onboarding";
 import { saveUsersTablePreferencesAction } from "@/app/actions/preferences";
@@ -40,6 +40,17 @@ import { ColumnManager } from "./ColumnManager";
 import { CreateUserDrawer } from "./CreateUserDrawer";
 import { CsvImport } from "./CsvImport";
 import { UsersTable, type SelectionApi } from "./UsersTable";
+import {
+  BulkActionBar,
+  BulkDeleteConfirm,
+  BulkEditModal,
+  bulkChangePayload,
+  bulkUpdateErrorMessage,
+  captureGridScroll,
+  optimisticPatch,
+  restoreGridScroll,
+  type BulkTarget,
+} from "./BulkActions";
 import type { CustomField, Toast, ToastKind, UserRow } from "./types";
 
 // The row/toast types moved to ./types so the table and the drawers can import
@@ -115,17 +126,57 @@ export function UsersContent({
     setAdmissionFilter("");
   };
 
+  // --- Optimistic overlay for bulk field edits -----------------------------
+  //
+  // A bulk "Change class" touches up to 500 rows. Waiting for the server round
+  // trip AND the RSC refresh before anything moves makes the console feel
+  // broken, so the patch is applied locally the moment the action is fired and
+  // every read below goes through `rows` rather than the `users` prop.
+  //
+  // ROLLBACK is the whole reason this is a separate patch map rather than a
+  // rewritten copy of `users`: on failure we drop the patch and the server's
+  // rows reappear untouched, with nothing to reconstruct.
+  //
+  // The patch is also dropped whenever a fresh `users` array arrives, because
+  // at that point the server has spoken and the overlay can only be stale or
+  // redundant. Compared during render (the same pattern the filter signature
+  // below uses) rather than in an effect, so the grid never paints one frame of
+  // optimistic data over already-refreshed rows.
+  const [optimistic, setOptimistic] = useState<Map<number, Partial<UserRow>>>(
+    () => new Map(),
+  );
+  const [lastUsers, setLastUsers] = useState(users);
+  if (lastUsers !== users) {
+    setLastUsers(users);
+    if (optimistic.size > 0) setOptimistic(new Map());
+  }
+
+  const rows = useMemo(() => {
+    if (optimistic.size === 0) return users;
+    return users.map((u) => {
+      const patch = optimistic.get(u.id);
+      if (!patch) return u;
+      // `custom` is merged rather than replaced: a patch only ever names the
+      // one column that changed.
+      return {
+        ...u,
+        ...patch,
+        custom: { ...u.custom, ...(patch.custom ?? {}) },
+      };
+    });
+  }, [users, optimistic]);
+
   // Admission years that actually occur, newest first, for the filter.
   const admissionYears = useMemo(
     () =>
       Array.from(
         new Set(
-          users
+          rows
             .map((u) => u.admissionYear)
             .filter((y): y is number => y != null),
         ),
       ).sort((a, b) => b - a),
-    [users],
+    [rows],
   );
 
   const [drawerOpen, setDrawerOpen] = useState(false);
@@ -148,6 +199,8 @@ export function UsersContent({
   // filter that produced it.
   const [selected, setSelected] = useState<Set<number>>(new Set());
   const [bulkOpen, setBulkOpen] = useState(false);
+  // Which "Change X" modal is open, if any.
+  const [bulkEdit, setBulkEdit] = useState<BulkTarget | null>(null);
 
   const [toasts, setToasts] = useState<Toast[]>([]);
   const notify = (kind: ToastKind, message: string) =>
@@ -216,7 +269,7 @@ export function UsersContent({
 
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
-    return users.filter((u) => {
+    return rows.filter((u) => {
       if (roleFilter && u.role !== roleFilter) return false;
       if (courseFilter && u.course !== courseFilter) return false;
       if (classFilter && u.className !== classFilter) return false;
@@ -232,7 +285,7 @@ export function UsersContent({
       );
     });
   }, [
-    users,
+    rows,
     search,
     roleFilter,
     courseFilter,
@@ -272,8 +325,10 @@ export function UsersContent({
     if (selected.size > 0) setSelected(new Set());
   }
 
-  // Only meaningful for someone who can actually act on a selection.
-  const canSelect = canDelete;
+  // Only meaningful for someone who can actually act on a selection. Editing
+  // fields in bulk is `manageUsers` work, deleting is `deleteUsers` work, so
+  // holding EITHER is reason enough to be offered the checkboxes.
+  const canSelect = canDelete || canEditStudents;
 
   const toggleRow = useCallback((id: number) => {
     setSelected((prev) => {
@@ -303,11 +358,108 @@ export function UsersContent({
     [filtered, selected],
   );
 
+  // --- Bulk field edits ----------------------------------------------------
+  //
+  // One entry per thing the operator can change across a selection: the three
+  // built-in student fields, then one per admin-defined column. Custom columns
+  // are included rather than special-cased so "Change Year of Leaving" needs no
+  // code of its own — it is simply the column the admin created, and any column
+  // they add later gets a button for free.
+  const bulkTargets = useMemo<BulkTarget[]>(() => {
+    const builtIn: BulkTarget[] = [
+      { kind: "className", label: t("onboarding.create.class") },
+      { kind: "course", label: t("onboarding.create.course") },
+      { kind: "admissionYear", label: t("onboarding.create.admissionYear") },
+    ];
+    // An admin can create a custom column whose label matches a built-in field
+    // — this installation has both a built-in "Year of admission" and a custom
+    // one. Two identically-labelled buttons that write to different places is
+    // the worst possible outcome, so a colliding custom column is tagged.
+    const builtInLabels = new Set(builtIn.map((b) => b.label.toLowerCase()));
+    const custom = customFields.map((field): BulkTarget => {
+      const collides = builtInLabels.has(field.label.toLowerCase());
+      return {
+        kind: "custom",
+        field,
+        label: collides
+          ? `${field.label} (${t("onboarding.csv.customTag")})`
+          : field.label,
+      };
+    });
+    return [...builtIn, ...custom];
+  }, [customFields, t]);
+
+  const [bulkUpdating, startBulkUpdate] = useTransition();
+
+  /**
+   * Apply one field change to every selected row.
+   *
+   * Order matters: patch locally, fire, then either confirm (refresh, which
+   * drops the patch when the new rows land) or roll back. The scroll offset is
+   * captured before and restored after, because the refresh re-renders several
+   * hundred rows and an operator who acted on row 380 must not be thrown back
+   * to row 1.
+   */
+  const applyBulkChange = (target: BulkTarget, rawValue: string) => {
+    const ids = selectedRows.map((u) => u.id);
+    if (ids.length === 0) return;
+    const scroll = captureGridScroll();
+
+    setOptimistic((prev) => {
+      const next = new Map(prev);
+      const patch = optimisticPatch(target, rawValue);
+      for (const id of ids) next.set(id, { ...(next.get(id) ?? {}), ...patch });
+      return next;
+    });
+
+    startBulkUpdate(async () => {
+      const result = await bulkUpdateUsersAction({
+        ids,
+        change: bulkChangePayload(target, rawValue),
+      });
+
+      if (!result.ok) {
+        // ROLL BACK. Dropping the whole patch is correct even though only this
+        // one change failed: a patch only ever exists while an action is in
+        // flight, and there is never more than one in flight.
+        setOptimistic(new Map());
+        notify("error", bulkUpdateErrorMessage(result.error, target.label, t));
+        return;
+      }
+
+      // Report both halves, the same way the bulk delete does — "changed 9"
+      // after asking for 12 is the ambiguous partial state to avoid.
+      notify(
+        result.skipped.length === 0 ? "success" : "error",
+        result.skipped.length === 0
+          ? t("onboarding.bulk.changed", {
+              count: result.updated,
+              field: target.label,
+            })
+          : t("onboarding.bulk.changedWithSkips", {
+              count: result.updated,
+              field: target.label,
+              skipped: result.skipped.length,
+              names: result.skipped
+                .slice(0, 3)
+                .map((x) => x.name)
+                .join(", "),
+            }),
+      );
+
+      setSelected(new Set());
+      setBulkEdit(null);
+      router.refresh();
+      restoreGridScroll(scroll);
+    });
+  };
+
   const [bulkDeleting, startBulkDelete] = useTransition();
 
   const confirmBulkDelete = () => {
     const ids = selectedRows.map((u) => u.id);
     if (ids.length === 0) return;
+    const scroll = captureGridScroll();
     startBulkDelete(async () => {
       const result = await bulkDeleteUsersAction(ids);
       if (!result.ok) {
@@ -344,6 +496,7 @@ export function UsersContent({
       setSelected(new Set());
       setBulkOpen(false);
       router.refresh();
+      restoreGridScroll(scroll);
     });
   };
 
@@ -505,53 +658,22 @@ export function UsersContent({
             : t("onboarding.resultsCountPlural", { count: filtered.length })}
         </p>
 
-        {/* Persistent selection toolbar. Present whenever anything is
-            selected, and it never leaves the filter's scope ambiguous — the
-            count always reads "N of M filtered". */}
+        {/* Bulk action bar. Present ONLY while something is selected, and it
+            never leaves the filter's scope ambiguous — the count always reads
+            "N of M filtered". */}
         {canSelect && selectedRows.length > 0 && (
-          <div className="mb-3 flex flex-wrap items-center gap-3 rounded-lg border border-primary/30 bg-lavender px-4 py-3">
-            <span className="text-sm font-semibold text-primary [font-variant-numeric:tabular-nums]">
-              {t("onboarding.bulk.selectedCount", {
-                count: selectedRows.length,
-                total: filtered.length,
-              })}
-            </span>
-            {selectedRows.length < filtered.length && (
-              <button
-                type="button"
-                onClick={() => toggleAllFiltered(true)}
-                className="cursor-pointer text-sm font-medium text-teal underline-offset-2 hover:underline"
-              >
-                {t("onboarding.bulk.selectAllFiltered", {
-                  count: filtered.length,
-                })}
-              </button>
-            )}
-            <button
-              type="button"
-              onClick={() => setSelected(new Set())}
-              className="cursor-pointer text-sm font-medium text-muted underline-offset-2 hover:text-ink hover:underline"
-            >
-              {t("onboarding.bulk.clear")}
-            </button>
-            <span className="ml-auto flex items-center gap-3">
-              {/* The scope is spelled out again next to the destructive
-                  button, because that is where it actually matters. */}
-              <span className="hidden text-xs text-muted sm:inline">
-                {t("onboarding.bulk.scopeNote")}
-              </span>
-              <button
-                type="button"
-                onClick={() => setBulkOpen(true)}
-                className="inline-flex cursor-pointer items-center gap-1.5 rounded-md bg-danger px-3 py-1.5 text-sm font-medium text-white hover:opacity-90"
-              >
-                <Trash2 className="size-3.5" />
-                {t("onboarding.bulk.deleteSelected", {
-                  count: selectedRows.length,
-                })}
-              </button>
-            </span>
-          </div>
+          <BulkActionBar
+            selectedCount={selectedRows.length}
+            filteredCount={filtered.length}
+            targets={bulkTargets}
+            busy={bulkUpdating || bulkDeleting}
+            canDelete={canDelete}
+            canEdit={canEditStudents}
+            onSelectAll={() => toggleAllFiltered(true)}
+            onClear={() => setSelected(new Set())}
+            onChange={setBulkEdit}
+            onDelete={() => setBulkOpen(true)}
+          />
         )}
 
         <UsersTable
@@ -618,6 +740,18 @@ export function UsersContent({
         />
       )}
 
+      {bulkEdit && (
+        <BulkEditModal
+          target={bulkEdit}
+          count={selectedRows.length}
+          pending={bulkUpdating}
+          courseOptions={courseOptions}
+          classOptions={classOptions}
+          onCancel={() => setBulkEdit(null)}
+          onApply={(value) => applyBulkChange(bulkEdit, value)}
+        />
+      )}
+
       {bulkOpen && (
         <BulkDeleteConfirm
           users={selectedRows}
@@ -637,113 +771,6 @@ export function UsersContent({
       )}
 
       <ToastStack toasts={toasts} onDismiss={dismiss} />
-    </div>
-  );
-}
-
-/**
- * Bulk-delete confirmation.
- *
- * This is the most destructive action in the console — it cascades across
- * tickets, ledgers, attendance and custom values for every selected account,
- * and there is no undo. So it does three things a plain "Are you sure?" does
- * not:
- *
- *   1. States the EXACT count, and lists the accounts (scrollable) so the
- *      operator can see what they actually selected rather than a number.
- *   2. Requires typing that count. A second click is muscle memory; typing "12"
- *      is a deliberate act, and it forces the operator to read the number.
- *   3. Says plainly that it is permanent and names what else goes with it.
- */
-function BulkDeleteConfirm({
-  users,
-  pending,
-  onCancel,
-  onConfirm,
-}: {
-  users: UserRow[];
-  pending: boolean;
-  onCancel: () => void;
-  onConfirm: () => void;
-}) {
-  const t = useT();
-  const [typed, setTyped] = useState("");
-  const confirmed = typed.trim() === String(users.length);
-
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-      <button
-        type="button"
-        aria-label={t("common.cancel")}
-        onClick={onCancel}
-        className="absolute inset-0 bg-ink/40"
-      />
-      <div
-        role="dialog"
-        aria-modal="true"
-        className="relative flex max-h-[85vh] w-full max-w-md flex-col rounded-lg border border-line bg-surface p-6 shadow-xl"
-      >
-        <div className="flex items-start gap-3">
-          <span className="rounded-full bg-danger/10 p-2 text-danger">
-            <TriangleAlert className="size-5" aria-hidden />
-          </span>
-          <div className="min-w-0">
-            <h2 className="text-base font-semibold text-ink">
-              {t("onboarding.bulk.confirmTitle", { count: users.length })}
-            </h2>
-            <p className="mt-1 text-sm text-muted">
-              {t("onboarding.bulk.confirmBody", { count: users.length })}
-            </p>
-            <p className="mt-2 text-sm font-medium text-danger">
-              {t("onboarding.bulk.irreversible")}
-            </p>
-          </div>
-        </div>
-
-        <ul className="mt-4 max-h-40 overflow-y-auto rounded-md border border-line bg-canvas px-3 py-2 text-sm">
-          {users.map((u) => (
-            <li key={u.id} className="truncate py-0.5 text-ink">
-              {u.fullName}
-              {u.studentId && (
-                <span className="text-muted"> - {u.studentId}</span>
-              )}
-            </li>
-          ))}
-        </ul>
-
-        <label className="mt-4 block">
-          <span className="mb-1 block text-xs font-medium text-ink">
-            {t("onboarding.bulk.typeCount", { count: users.length })}
-          </span>
-          <input
-            autoFocus
-            inputMode="numeric"
-            value={typed}
-            onChange={(e) => setTyped(e.target.value)}
-            className="w-full rounded-md border border-line bg-surface px-3 py-2 text-sm text-ink focus:border-teal"
-          />
-        </label>
-
-        <div className="mt-5 flex justify-end gap-2">
-          <button
-            type="button"
-            onClick={onCancel}
-            className="cursor-pointer rounded-md border border-line bg-surface px-4 py-2 text-sm font-medium text-ink hover:bg-lavender"
-          >
-            {t("common.cancel")}
-          </button>
-          <button
-            type="button"
-            onClick={onConfirm}
-            disabled={pending || !confirmed}
-            className="cursor-pointer rounded-md bg-danger px-4 py-2 text-sm font-medium text-white hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
-          >
-            {pending
-              ? t("onboarding.deleting")
-              : t("onboarding.bulk.deleteSelected", { count: users.length })}
-          </button>
-        </div>
-      </div>
     </div>
   );
 }

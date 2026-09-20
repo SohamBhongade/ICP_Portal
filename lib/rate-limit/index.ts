@@ -69,6 +69,12 @@ export const RULES = {
    * Five sweeps per ten minutes is well above any real registrar workflow.
    */
   bulkDeleteUsers: { name: "delete:bulk", limit: 5, windowSeconds: 10 * 60 },
+  /**
+   * BULK FIELD EDITS, per admin — also counted per operation. Roomier than the
+   * bulk delete because reassigning a class or a course is routine, reversible
+   * registrar work, not a destructive sweep.
+   */
+  bulkUpdateUsers: { name: "update:bulk", limit: 30, windowSeconds: 10 * 60 },
   /** Custom-column definition changes (create / rename / delete), per admin. */
   userFieldMutation: { name: "field:user", limit: 30, windowSeconds: 10 * 60 },
   /** Password assignment (approve / activate), per admin. */

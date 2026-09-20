@@ -7,55 +7,52 @@
 // and the rule is: the EARLIER year of the range is the year of admission.
 //   "2024-2025" -> 2024      "2024-25" -> 2024      "2024" -> 2024
 // A full date ("2024-06-15", "15/06/2024") also works: its year is taken.
+//
+// The actual cell reading now lives in lib/import/dates.ts, which is the ONE
+// normaliser every date-ish import field shares — Excel serials, ISO strings,
+// day-first DD/MM/YYYY, month names and academic-year ranges all resolve the
+// same way here as they do for D.O.B and Year of Leaving. This module keeps the
+// admission-specific policy on top of it: a floor of 1950, so a typo like
+// "20245" or a stray "1905" is refused rather than stored.
+
+import { normalizeYearCell } from "./import/dates";
 
 /** Earliest / latest admission year accepted. Bounds out typos like "20245". */
-const MIN_YEAR = 1950;
-const MAX_YEAR = 2100;
-
-/**
- * Excel stores a cell formatted as a DATE as a serial day number (45458 is
- * 15 Jun 2024). Serial 1 = 1900-01-01, with Excel's fake 1900-02-29, so the
- * standard conversion is days since 1899-12-30.
- */
-function excelSerialYear(serial: number): number | null {
-  // 36526 = 2000-01-01, 73051 = 2100-01-01. Anything outside that is treated
-  // as "not a date" rather than guessed at — so a typo like "20245" is
-  // rejected instead of silently becoming 1955.
-  if (serial < 36526 || serial > 73051) return null;
-  const ms = Date.UTC(1899, 11, 30) + Math.round(serial) * 86_400_000;
-  return new Date(ms).getUTCFullYear();
-}
+const MIN_ADMISSION_YEAR = 1950;
+const MAX_ADMISSION_YEAR = 2100;
 
 /**
  * Read a year of admission out of any cell a college sheet is likely to hold.
  * Returns null when the cell is blank or holds nothing year-like.
  */
-export function parseAdmissionYear(raw: string | number | null | undefined): number | null {
-  if (raw == null) return null;
-  if (typeof raw === "number") {
-    return Number.isInteger(raw) && raw >= MIN_YEAR && raw <= MAX_YEAR
-      ? raw
-      : excelSerialYear(raw);
-  }
-  // The import neutralizes a leading "-"/"+"/"=" by prefixing "'"; undo that.
-  const text = raw.trim().replace(/^'/, "");
-  if (!text) return null;
+export function parseAdmissionYear(
+  raw: string | number | null | undefined,
+): number | null {
+  const out = normalizeYearCell(raw);
+  if (!out.ok || out.value == null) return null;
+  return out.value >= MIN_ADMISSION_YEAR && out.value <= MAX_ADMISSION_YEAR
+    ? out.value
+    : null;
+}
 
-  // A bare number: either a year or an Excel date serial.
-  if (/^\d+(\.\d+)?$/.test(text)) {
-    const n = Number(text);
-    if (Number.isInteger(n) && n >= MIN_YEAR && n <= MAX_YEAR) return n;
-    return excelSerialYear(n);
-  }
+/**
+ * Same reading, but it distinguishes "blank" from "unreadable" so the importer
+ * can REPORT a cell it could not use instead of quietly leaving the column
+ * empty. `parseAdmissionYear` stays for the call sites that only want a value.
+ */
+export type AdmissionYearOutcome =
+  | { ok: true; value: number | null }
+  | { ok: false };
 
-  // Every 4-digit year in the cell, e.g. "2024-2025" -> [2024, 2025].
-  const years = (text.match(/\b(19|20)\d{2}\b/g) ?? [])
-    .map(Number)
-    .filter((y) => y >= MIN_YEAR && y <= MAX_YEAR);
-  if (years.length === 0) return null;
-  // The earliest year is the year of admission ("2024-25" -> 2024). A short
-  // second half like "-25" is never a 4-digit match, so it can't win.
-  return Math.min(...years);
+export function readAdmissionYear(
+  raw: string | number | null | undefined,
+): AdmissionYearOutcome {
+  const out = normalizeYearCell(raw);
+  if (!out.ok) return { ok: false };
+  if (out.value == null) return { ok: true, value: null };
+  return out.value >= MIN_ADMISSION_YEAR && out.value <= MAX_ADMISSION_YEAR
+    ? { ok: true, value: out.value }
+    : { ok: false };
 }
 
 // ---------------------------------------------------------------------------

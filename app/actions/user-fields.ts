@@ -45,8 +45,8 @@ import { RULES, checkRateLimit } from "@/lib/rate-limit";
 import { USERS_COLUMN_KEYS } from "@/lib/table-layout";
 import {
   USER_FIELD_LIMITS,
+  coerceFieldValue,
   uniqueFieldKey,
-  validateFieldValue,
   type CustomField,
   type UserFieldType,
 } from "@/lib/user-fields";
@@ -365,20 +365,41 @@ export async function setUserFieldValueAction(input: {
     return { ok: true };
   }
 
-  const issue = validateFieldValue(
+  // COERCE, don't just validate. `validateFieldValue` checks the STORED shape,
+  // so it rejected an Excel serial and a typed "03/04/2005" outright — which on
+  // the import path meant those values were dropped in silence. This path now
+  // normalizes exactly the way the import does (lib/import/dates.ts), so
+  // "2024-25" typed into a `year` column stores 2024 and a date typed
+  // day-first stores the right day.
+  const coerced = coerceFieldValue(
     { type: field.type as UserFieldType, options: field.options ?? null },
     value,
   );
-  if (issue) return { ok: false, error: "badValue" };
+  if (!coerced.ok) return { ok: false, error: "badValue" };
+  const stored = coerced.value;
+  // Coercion can empty a value that was not blank (it cannot today, but the
+  // contract allows it); treat that as a clear rather than storing "".
+  if (!stored) {
+    await db
+      .delete(userFieldValues)
+      .where(
+        and(
+          eq(userFieldValues.userId, data.userId),
+          eq(userFieldValues.fieldId, data.fieldId),
+        ),
+      );
+    revalidateGrid();
+    return { ok: true };
+  }
 
   try {
     await db
       .insert(userFieldValues)
-      .values({ userId: data.userId, fieldId: data.fieldId, value })
+      .values({ userId: data.userId, fieldId: data.fieldId, value: stored })
       // UNIQUE(user_id, field_id) is what makes this an upsert.
       .onConflictDoUpdate({
         target: [userFieldValues.userId, userFieldValues.fieldId],
-        set: { value, updatedAt: new Date() },
+        set: { value: stored, updatedAt: new Date() },
       });
   } catch (err) {
     logServerError("setUserFieldValueAction", err, {
