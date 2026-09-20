@@ -26,10 +26,22 @@
 // the operator does not pick it twice.
 
 import bcrypt from "bcryptjs";
+import { and, eq, or, sql, type SQL } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import { db } from "@/db";
-import { userFieldValues, users } from "@/db/schema";
+import { feeLedgers, userFieldValues, users } from "@/db/schema";
 import { currentUserWithCapability } from "@/lib/auth";
+import { can, type Role } from "@/lib/auth/permissions";
+import { todayIso } from "@/lib/dates";
+import type { FeeCategory } from "@/lib/fees";
+import {
+  buildFeeLines,
+  feeCategoryForTarget,
+  feeLineParticulars,
+  feeTargetKey,
+  type FeeImportOptions,
+  type FeeLine,
+} from "@/lib/import/fee-columns";
 import { extractYear, normalizeCourse, resolveCourse } from "@/lib/courses";
 import { logServerError } from "@/lib/errors";
 import { RULES, checkRateLimit } from "@/lib/rate-limit";
@@ -39,7 +51,7 @@ import {
   type ImportRejection,
   type ParsedSheet,
 } from "@/lib/import/parse";
-import { z, parseInput, LIMITS } from "@/lib/validation/core";
+import { z, parseInput, LIMITS, isoDate } from "@/lib/validation/core";
 import {
   customColumnKey,
   validateFieldValue,
@@ -94,10 +106,15 @@ export type ImportMapping = Partial<Record<TargetField, string>>;
 function resolveMapping(
   raw: Record<string, string>,
   fields: CustomField[],
-): { mapping: ImportMapping; customTargets: CustomField[] } {
+): {
+  mapping: ImportMapping;
+  customTargets: CustomField[];
+  feeTargets: FeeCategory[];
+} {
   const byColumnKey = new Map(fields.map((f) => [customColumnKey(f.key), f]));
   const mapping: ImportMapping = {};
   const customTargets: CustomField[] = [];
+  const feeTargets: FeeCategory[] = [];
 
   for (const [target, header] of Object.entries(raw)) {
     if (BUILT_IN_TARGETS.has(target)) {
@@ -108,18 +125,46 @@ function resolveMapping(
     if (field) {
       mapping[target] = header;
       customTargets.push(field);
+      continue;
+    }
+    // `fee:<category value>` — whitelisted against the fixed FEE_CATEGORIES
+    // list, so a forged key cannot invent a ledger category.
+    const category = feeCategoryForTarget(target);
+    if (category) {
+      mapping[target] = header;
+      feeTargets.push(category);
     }
     // Anything else is silently dropped: an unknown target is a stale or forged
     // key, and refusing the whole import over one would strand the operator.
   }
-  return { mapping, customTargets };
+  return { mapping, customTargets, feeTargets };
 }
+
+/**
+ * Options for posting mapped fee columns to the ledger. Sent as JSON beside
+ * the mapping and validated here — every field is operator-controlled input.
+ */
+const feeOptionsSchema = z.strictObject({
+  /** Ledger date for every entry this import posts. */
+  date: isoDate,
+  /** Optional note appended to particulars, e.g. "AY 2024-25". */
+  note: z.string().trim().max(LIMITS.shortText).default(""),
+  scholarshipOnTop: z.boolean().default(true),
+  /**
+   * Post fees to students who ALREADY exist (matched by roll number AND name)
+   * instead of reporting them as duplicates. Off by default.
+   */
+  updateExisting: z.boolean().default(false),
+});
+type FeeOptions = z.infer<typeof feeOptionsSchema>;
 
 export type ImportError =
   | "forbidden"
+  | "feesForbidden"
   | "rateLimited"
   | "missingFile"
   | "badMapping"
+  | "badFeeOptions"
   | ImportRejection;
 
 export type PreviewResult =
@@ -129,17 +174,41 @@ export type PreviewResult =
       rows: Record<string, string>[];
       /** Live custom columns, offered as additional mapping targets. */
       customFields: CustomField[];
+      /** Whether this operator may post fee columns to the ledger (feeWrites). */
+      canPostFees: boolean;
+      /** Institution-local today, to pre-fill the ledger date. */
+      today: string;
       limits: { maxRows: number; maxCellLength: number; maxFileBytes: number };
     }
   | { ok: false; error: ImportError; retryAfter?: number };
 
 export type RowFailure = {
   row: number;
-  reason: "missingName" | "missingRollNo" | "invalidEmail" | "invalidCourse" | "duplicate" | "unknown";
+  reason:
+    | "missingName"
+    | "missingRollNo"
+    | "invalidEmail"
+    | "invalidCourse"
+    | "invalidFee"
+    | "duplicate"
+    | "nameMismatch"
+    | "unknown";
+  /** For invalidFee: the stored value of the category whose cell was bad. */
+  detail?: string;
 };
 
 export type ImportResult =
-  | { ok: true; created: number; failed: RowFailure[] }
+  | {
+      ok: true;
+      created: number;
+      /** Existing students who received fee entries (updateExisting only). */
+      updated: number;
+      /** Ledger rows written, across new and existing students. */
+      feeEntries: number;
+      /** Existing students skipped because this exact entry was already posted. */
+      alreadyPosted: number;
+      failed: RowFailure[];
+    }
   | { ok: false; error: ImportError; retryAfter?: number };
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -187,6 +256,8 @@ export async function parseImportFileAction(
     // Sent with the preview so the mapping UI can offer custom columns without
     // a second round trip. Authoritative either way: the import re-loads them.
     customFields: await listUserFields(),
+    canPostFees: can(actor.role as Role, "feeWrites"),
+    today: todayIso(),
     limits: {
       maxRows: IMPORT_LIMITS.maxRows,
       maxCellLength: IMPORT_LIMITS.maxCellLength,
@@ -252,16 +323,80 @@ export async function importStudentsFileAction(
   // not carried over from the preview — a `custom:` key the browser sent is a
   // claim about what columns exist, and only the database gets to answer that.
   const fields = await listUserFields();
-  const { mapping, customTargets } = resolveMapping(
+  const { mapping, customTargets, feeTargets } = resolveMapping(
     mappingParsed.data as Record<string, string>,
     fields,
   );
+
+  // FEE COLUMNS. Posting to the ledger is a separate capability from creating
+  // accounts, so it is checked separately — holding `createUsers` alone must
+  // not be a back door into fee writes.
+  let feeOptions: FeeOptions | null = null;
+  if (feeTargets.length > 0) {
+    if (!can(actor.role as Role, "feeWrites")) {
+      return { ok: false, error: "feesForbidden" };
+    }
+    let rawOptions: unknown;
+    try {
+      rawOptions = JSON.parse(String(formData.get("feeOptions") ?? "{}"));
+    } catch {
+      return { ok: false, error: "badFeeOptions" };
+    }
+    const optionsParsed = parseInput(feeOptionsSchema, rawOptions);
+    if (!optionsParsed.ok) return { ok: false, error: "badFeeOptions" };
+    feeOptions = optionsParsed.data;
+  }
 
   // RE-PARSE. The preview's rows went through the client and are not trusted.
   const parsed = await parseImportFile(file);
   if (!parsed.ok) return { ok: false, error: parsed.reason };
 
-  return insertRows(parsed.sheet, mapping, customTargets, actor.id);
+  return insertRows(
+    parsed.sheet,
+    mapping,
+    customTargets,
+    feeTargets,
+    feeOptions,
+    actor.id,
+  );
+}
+
+/** Pull the mapped fee cells out of a mapped row, keyed by category value. */
+function feeCellsOf(
+  row: Record<string, string | undefined>,
+  feeTargets: FeeCategory[],
+): Record<string, string | undefined> {
+  const cells: Record<string, string | undefined> = {};
+  for (const category of feeTargets) {
+    cells[category.value] = row[feeTargetKey(category.value)];
+  }
+  return cells;
+}
+
+/** Name comparison that ignores case, spacing and punctuation. */
+const sameName = (a: string, b: string) =>
+  a.toLowerCase().replace(/[^\p{L}\p{N}]/gu, "") ===
+  b.toLowerCase().replace(/[^\p{L}\p{N}]/gu, "");
+
+/**
+ * fee_ledgers rows for a set of lines. `studentId` is either a real id or a SQL
+ * subquery that resolves it inside the same batch (new accounts).
+ */
+function ledgerValues(
+  studentId: number | SQL,
+  lines: FeeLine[],
+  options: FeeOptions,
+  actorId: number,
+) {
+  return lines.map((line) => ({
+    studentId,
+    particulars: feeLineParticulars(line, options.note),
+    type: line.type,
+    amount: line.amount,
+    receiptNo: null,
+    date: options.date,
+    recordedBy: actorId,
+  }));
 }
 
 /**
@@ -276,10 +411,18 @@ async function insertRows(
   sheet: ParsedSheet,
   mapping: ImportMapping,
   customTargets: CustomField[],
+  feeTargets: FeeCategory[],
+  feeOptions: FeeOptions | null,
   actorId: number,
 ): Promise<ImportResult> {
   let created = 0;
+  let updated = 0;
+  let feeEntries = 0;
+  let alreadyPosted = 0;
   const failed: RowFailure[] = [];
+  const buildOptions: FeeImportOptions = {
+    scholarshipOnTop: feeOptions?.scholarshipOnTop ?? true,
+  };
 
   for (let i = 0; i < sheet.rows.length; i++) {
     const r = applyMapping(sheet.rows[i], mapping);
@@ -310,31 +453,114 @@ async function insertRows(
     const norm = normalizeCourse(r.course);
     const year = norm.year ?? extractYear(r.className ?? "").year ?? undefined;
 
+    // Fee cells are validated BEFORE anything is written, so a typo like
+    // "45,45S" fails the row cleanly instead of creating a student whose
+    // ledger silently lacks that charge.
+    let feeLines: FeeLine[] = [];
+    if (feeOptions && feeTargets.length > 0) {
+      const fees = buildFeeLines(feeCellsOf(r, feeTargets), buildOptions);
+      if (!fees.ok) {
+        failed.push({
+          row: rowNo,
+          reason: "invalidFee",
+          detail: fees.category.value,
+        });
+        continue;
+      }
+      feeLines = fees.lines;
+    }
+
     try {
       const passwordHash = await bcrypt.hash(`Icp@${studentId}`, BCRYPT_COST);
-      const res = await db
-        .insert(users)
-        .values({
-          fullName,
-          studentId,
-          email,
-          phone: r.phone?.trim() || undefined,
-          role: "student",
-          status: "active",
-          course: norm.course ?? undefined,
-          year,
-          className: r.className?.trim() || undefined,
-          practicalBatch: r.practicalBatch?.trim() || undefined,
-          passwordHash,
-        })
-        .onConflictDoNothing()
-        .returning({ id: users.id });
+      const userValues = {
+        fullName,
+        studentId,
+        email,
+        phone: r.phone?.trim() || undefined,
+        role: "student" as const,
+        status: "active" as const,
+        course: norm.course ?? undefined,
+        year,
+        className: r.className?.trim() || undefined,
+        practicalBatch: r.practicalBatch?.trim() || undefined,
+        passwordHash,
+      };
 
-      if (res.length === 0) {
-        failed.push({ row: rowNo, reason: "duplicate" });
-      } else {
+      if (feeLines.length === 0 || !feeOptions) {
+        // No fees for this row — the original path, unchanged.
+        const res = await db
+          .insert(users)
+          .values(userValues)
+          .onConflictDoNothing()
+          .returning({ id: users.id });
+
+        if (res.length === 0) {
+          failed.push({ row: rowNo, reason: "duplicate" });
+        } else {
+          created++;
+          await writeCustomValues(res[0].id, r, customTargets);
+        }
+        continue;
+      }
+
+      // ACCOUNT + FEES AS ONE db.batch() — an implicit transaction on libSQL —
+      // so a student is never created without the fees the sheet gave them.
+      // The fee rows find the new account by roll number in a subquery, since
+      // its id does not exist until the batch runs. The user insert has NO
+      // onConflictDoNothing here on purpose: on a duplicate it must THROW and
+      // roll the batch back, otherwise the subquery would resolve to the
+      // EXISTING student and silently post fees onto their ledger.
+      const newIdSql = sql`(SELECT id FROM users WHERE student_id = ${studentId})`;
+      let inserted: { id: number }[] | null = null;
+      try {
+        const [userRes] = await db.batch([
+          db.insert(users).values(userValues).returning({ id: users.id }),
+          db
+            .insert(feeLedgers)
+            .values(ledgerValues(newIdSql, feeLines, feeOptions, actorId)),
+        ]);
+        inserted = userRes;
+      } catch (err) {
+        // Most likely a unique-constraint hit. Confirm by looking, rather than
+        // by parsing driver error text; anything else is re-thrown as unknown.
+        const [existing] = await db
+          .select({ id: users.id })
+          .from(users)
+          .where(
+            email
+              ? or(eq(users.studentId, studentId), eq(users.email, email))
+              : eq(users.studentId, studentId),
+          )
+          .limit(1);
+        if (!existing) throw err;
+      }
+
+      if (inserted && inserted.length > 0) {
         created++;
-        await writeCustomValues(res[0].id, r, customTargets);
+        feeEntries += feeLines.length;
+        await writeCustomValues(inserted[0].id, r, customTargets);
+        continue;
+      }
+
+      // Duplicate. Optionally post the fees to the existing student.
+      if (!feeOptions.updateExisting) {
+        failed.push({ row: rowNo, reason: "duplicate" });
+        continue;
+      }
+      const outcome = await postFeesToExisting(
+        studentId,
+        fullName,
+        feeLines,
+        feeOptions,
+        actorId,
+      );
+      if (outcome.kind === "posted") {
+        updated++;
+        feeEntries += outcome.entries;
+      } else if (outcome.kind === "alreadyPosted") {
+        alreadyPosted++;
+      } else {
+        failed.push({ row: rowNo, reason: outcome.kind });
       }
     } catch (err) {
       logServerError("importStudentsFileAction", err, {
@@ -346,7 +572,69 @@ async function insertRows(
   }
 
   if (created > 0) revalidatePath("/admin/users");
-  return { ok: true, created, failed };
+  if (feeEntries > 0) {
+    revalidatePath("/admin/fees");
+    revalidatePath("/student/fees");
+    revalidatePath("/admin");
+    revalidatePath("/student");
+  }
+  return { ok: true, created, updated, feeEntries, alreadyPosted, failed };
+}
+
+type ExistingOutcome =
+  | { kind: "posted"; entries: number }
+  | { kind: "alreadyPosted" }
+  | { kind: "duplicate" | "nameMismatch" };
+
+/**
+ * Post a row's fee lines onto a student who already has an account.
+ *
+ * Two guards, because roll numbers are often reused across courses/years
+ * ("Roll No. 1" exists in every class):
+ *   1. The roll number must belong to a STUDENT whose name matches the sheet —
+ *      otherwise the row is refused as `nameMismatch` and nothing is written.
+ *   2. RE-RUN SAFE: a line identical to one already on that date (same
+ *      particulars, side and amount) is skipped, so uploading the same sheet
+ *      twice does not double-charge anyone.
+ */
+async function postFeesToExisting(
+  studentId: string,
+  fullName: string,
+  lines: FeeLine[],
+  options: FeeOptions,
+  actorId: number,
+): Promise<ExistingOutcome> {
+  const [student] = await db
+    .select({ id: users.id, role: users.role, fullName: users.fullName })
+    .from(users)
+    .where(eq(users.studentId, studentId))
+    .limit(1);
+
+  // The collision was on email (or the roll number is a staff account).
+  if (!student || student.role !== "student") return { kind: "duplicate" };
+  if (!sameName(student.fullName, fullName)) return { kind: "nameMismatch" };
+
+  const sameDay = await db
+    .select({
+      particulars: feeLedgers.particulars,
+      type: feeLedgers.type,
+      amount: feeLedgers.amount,
+    })
+    .from(feeLedgers)
+    .where(
+      and(eq(feeLedgers.studentId, student.id), eq(feeLedgers.date, options.date)),
+    );
+  const seen = new Set(
+    sameDay.map((e) => `${e.type}|${e.particulars}|${Math.round(e.amount * 100)}`),
+  );
+
+  const fresh = ledgerValues(student.id, lines, options, actorId).filter(
+    (v) => !seen.has(`${v.type}|${v.particulars}|${Math.round(v.amount * 100)}`),
+  );
+  if (fresh.length === 0) return { kind: "alreadyPosted" };
+
+  await db.insert(feeLedgers).values(fresh);
+  return { kind: "posted", entries: fresh.length };
 }
 
 /**

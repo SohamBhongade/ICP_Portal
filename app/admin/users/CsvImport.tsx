@@ -18,6 +18,11 @@
 //   4. The same File plus the mapping go to importStudentsFileAction, which
 //      RE-PARSES server-side and writes. The previewed rows are never trusted
 //      for the write, because they made a round trip through this browser.
+//
+// FEE COLUMNS (optional). Columns such as "Tuition fees", "Development fees"
+// and "Scholarships" can be mapped onto fee-ledger categories. Each non-zero
+// cell becomes one ledger entry for that student, posted on the chosen date.
+// Only shown to operators holding `feeWrites`; the server re-checks.
 
 import { useMemo, useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
@@ -32,6 +37,21 @@ import {
 } from "@/app/actions/import";
 import { extractYear, normalizeCourse, resolveCourse } from "@/lib/courses";
 import { customColumnKey, type CustomField } from "@/lib/user-fields";
+import {
+  balanceToneClass,
+  feeCategoriesFor,
+  formatCurrency,
+  type FeeCategory,
+} from "@/lib/fees";
+import {
+  FEE_TARGET_GUESSES,
+  SCHOLARSHIP_VALUE,
+  TUITION_VALUE,
+  buildFeeLines,
+  feeLinesBalance,
+  feeTargetKey,
+} from "@/lib/import/fee-columns";
+import type { RowFailure } from "@/app/actions/import";
 import type { ToastKind } from "./UsersContent";
 
 /** Row shape after the operator's column mapping is applied (preview only). */
@@ -42,7 +62,8 @@ type PreviewIssue =
   | "missingName"
   | "missingRollNo"
   | "invalidEmail"
-  | "invalidCourse";
+  | "invalidCourse"
+  | "invalidFee";
 
 // A mapping target as the UI renders it. Built-ins carry an i18n key; custom
 // columns (Phase 9) carry the admin's own label verbatim.
@@ -97,6 +118,23 @@ function buildTargets(customFields: CustomField[]): MapTarget[] {
   ];
 }
 
+/**
+ * Fee-ledger targets, one per fee category, addressed as `fee:<value>` — the
+ * same key the server whitelists. Charges first, then credits.
+ */
+function buildFeeTargets(): (MapTarget & { category: FeeCategory })[] {
+  return [...feeCategoriesFor("charge"), ...feeCategoriesFor("payment")].map(
+    (category) => ({
+      key: feeTargetKey(category.value) as TargetField,
+      labelKey: category.labelKey,
+      required: false,
+      guesses: FEE_TARGET_GUESSES[category.value] ?? [],
+      category,
+    }),
+  );
+}
+const FEE_TARGETS = buildFeeTargets();
+
 function guessMapping(headers: string[], targets: MapTarget[]): Mapping {
   const map: Mapping = {};
   const used = new Set<string>();
@@ -134,6 +172,15 @@ export function CsvImport({
   const [customFields, setCustomFields] = useState<CustomField[]>([]);
   const [dragging, setDragging] = useState(false);
 
+  // Fee-ledger posting options (only used when a fee column is mapped).
+  const [canPostFees, setCanPostFees] = useState(false);
+  const [feeDate, setFeeDate] = useState("");
+  const [feeNote, setFeeNote] = useState("");
+  const [scholarshipOnTop, setScholarshipOnTop] = useState(true);
+  const [updateExisting, setUpdateExisting] = useState(false);
+  // Rows the server refused, shown after an import instead of closing blind.
+  const [failures, setFailures] = useState<RowFailure[] | null>(null);
+
   // Built-ins plus whatever custom columns exist right now.
   const targets = useMemo(() => buildTargets(customFields), [customFields]);
 
@@ -153,7 +200,15 @@ export function CsvImport({
       setHeaders(res.headers);
       setRows(res.rows);
       setCustomFields(res.customFields);
-      setMapping(guessMapping(res.headers, buildTargets(res.customFields)));
+      setCanPostFees(res.canPostFees);
+      setFeeDate(res.today);
+      // Fee columns are guessed AFTER the roster fields, so a header can never
+      // be claimed by both. Offered only to operators who may post fees.
+      const all = [
+        ...buildTargets(res.customFields),
+        ...(res.canPostFees ? FEE_TARGETS : []),
+      ];
+      setMapping(guessMapping(res.headers, all));
     });
   };
 
@@ -198,17 +253,40 @@ export function CsvImport({
     });
   }, [rows, mapping, customFields]);
 
+  // Fee categories the operator has actually mapped to a column.
+  const mappedFeeTargets = useMemo(
+    () => (canPostFees ? FEE_TARGETS.filter((f) => mapping[f.key]) : []),
+    [canPostFees, mapping],
+  );
+  const tuitionAndScholarshipMapped =
+    !!mapping[feeTargetKey(TUITION_VALUE)] &&
+    !!mapping[feeTargetKey(SCHOLARSHIP_VALUE)];
+
+  // Per-row ledger lines, computed with the SAME function the server uses.
+  const feeResults = useMemo(
+    () =>
+      rows.map((r) => {
+        const cells: Record<string, string | undefined> = {};
+        for (const f of mappedFeeTargets) {
+          cells[f.category.value] = r[mapping[f.key]!] ?? "";
+        }
+        return buildFeeLines(cells, { scholarshipOnTop });
+      }),
+    [rows, mapping, mappedFeeTargets, scholarshipOnTop],
+  );
+
   // Per-row client validation -> error code (or null = ready). Mirrors the
   // authoritative server checks so the preview never disagrees with the import.
   const validations: (PreviewIssue | null)[] = useMemo(() => {
-    return mapped.map((row) => {
+    return mapped.map((row, i) => {
       if (!row.fullName) return "missingName";
       if (!row.studentId) return "missingRollNo";
       if (row.email && !EMAIL_RE.test(row.email)) return "invalidEmail";
       if (resolveCourse(row.course).status === "invalid") return "invalidCourse";
+      if (!feeResults[i]?.ok) return "invalidFee";
       return null;
     });
-  }, [mapped]);
+  }, [mapped, feeResults]);
 
   // The canonical course each row will actually be saved as ("" when none).
   const resolvedCourses: string[] = useMemo(
@@ -240,6 +318,7 @@ export function CsvImport({
   const invalidCount = rows.length - validRows.length;
 
   const reset = () => {
+    setFailures(null);
     setFile(null);
     setFileName(null);
     setHeaders([]);
@@ -255,27 +334,54 @@ export function CsvImport({
       // previewed rows above are not the data that gets written.
       const body = new FormData();
       body.append("file", file);
-      body.append("mapping", JSON.stringify(mapping));
+      // Fee targets are dropped when this operator may not post fees, so the
+      // request never asks for something the server will refuse.
+      const sent = canPostFees
+        ? mapping
+        : Object.fromEntries(
+            Object.entries(mapping).filter(([k]) => !k.startsWith("fee:")),
+          );
+      body.append("mapping", JSON.stringify(sent));
+      if (mappedFeeTargets.length > 0) {
+        body.append(
+          "feeOptions",
+          JSON.stringify({
+            date: feeDate,
+            note: feeNote,
+            scholarshipOnTop,
+            updateExisting,
+          }),
+        );
+      }
       const result = await importStudentsFileAction(body);
       if (!result.ok) {
         notify("error", importErrorMessage(result.error, result.retryAfter));
         return;
       }
-      if (result.failed.length > 0) {
-        notify(
-          "success",
-          t("onboarding.toast.importedWithErrors", {
-            created: result.created,
-            failed: result.failed.length,
-          }),
-        );
-      } else {
-        notify(
-          "success",
-          t("onboarding.toast.imported", { created: result.created }),
-        );
+      let message =
+        result.failed.length > 0
+          ? t("onboarding.toast.importedWithErrors", {
+              created: result.created,
+              failed: result.failed.length,
+            })
+          : t("onboarding.toast.imported", { created: result.created });
+      if (result.feeEntries > 0 || result.alreadyPosted > 0) {
+        message +=
+          " " +
+          t("onboarding.toast.feesPosted", {
+            entries: result.feeEntries,
+            updated: result.updated,
+            already: result.alreadyPosted,
+          });
       }
+      notify("success", message);
       router.refresh();
+      // Keep the dialog open on partial failure so the operator can see
+      // exactly which rows were skipped and why.
+      if (result.failed.length > 0) {
+        setFailures(result.failed);
+        return;
+      }
       onClose();
     });
   };
@@ -403,6 +509,141 @@ export function CsvImport({
                 </div>
               </section>
 
+              {/* Step 2b: fee columns -> ledger (feeWrites only) */}
+              {canPostFees && (
+                <section className="rounded-md border border-line bg-canvas p-4">
+                  <h3 className="text-sm font-semibold text-ink">
+                    {t("onboarding.csv.feesTitle")}
+                  </h3>
+                  <p className="mb-3 mt-1 text-xs text-muted">
+                    {t("onboarding.csv.feesHint")}
+                  </p>
+                  <div className="grid gap-3 sm:grid-cols-2">
+                    {FEE_TARGETS.map((field) => (
+                      <label key={field.key} className="block">
+                        <span className="mb-1 block text-xs font-medium text-ink">
+                          {t(field.labelKey!)}
+                          <span
+                            className={`ml-1 rounded px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide ${
+                              field.category.side === "charge"
+                                ? "bg-lavender text-danger"
+                                : "bg-mint text-teal"
+                            }`}
+                          >
+                            {field.category.side === "charge"
+                              ? t("onboarding.csv.feeCharge")
+                              : t("onboarding.csv.feeCredit")}
+                          </span>
+                        </span>
+                        <select
+                          value={mapping[field.key] ?? ""}
+                          onChange={(e) =>
+                            setMapping((m) => ({
+                              ...m,
+                              [field.key]: e.target.value || undefined,
+                            }))
+                          }
+                          className="w-full rounded-md border border-line bg-surface px-3 py-2 text-sm text-ink focus:border-teal"
+                        >
+                          <option value="">{t("onboarding.csv.ignore")}</option>
+                          {headers.map((h) => (
+                            <option key={h} value={h}>
+                              {h}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                    ))}
+                  </div>
+
+                  {mappedFeeTargets.length > 0 && (
+                    <div className="mt-4 flex flex-col gap-3 border-t border-line pt-4">
+                      <div className="grid gap-3 sm:grid-cols-2">
+                        <label className="block">
+                          <span className="mb-1 block text-xs font-medium text-ink">
+                            {t("onboarding.csv.feeDate")}
+                            <span className="text-danger"> *</span>
+                          </span>
+                          <input
+                            type="date"
+                            value={feeDate}
+                            onChange={(e) => setFeeDate(e.target.value)}
+                            className="w-full rounded-md border border-line bg-surface px-3 py-2 text-sm text-ink focus:border-teal"
+                          />
+                        </label>
+                        <label className="block">
+                          <span className="mb-1 block text-xs font-medium text-ink">
+                            {t("onboarding.csv.feeNote")}
+                          </span>
+                          <input
+                            type="text"
+                            maxLength={120}
+                            value={feeNote}
+                            placeholder={t("onboarding.csv.feeNotePlaceholder")}
+                            onChange={(e) => setFeeNote(e.target.value)}
+                            className="w-full rounded-md border border-line bg-surface px-3 py-2 text-sm text-ink focus:border-teal"
+                          />
+                        </label>
+                      </div>
+
+                      {tuitionAndScholarshipMapped && (
+                        <label className="flex items-start gap-2 text-xs text-ink">
+                          <input
+                            type="checkbox"
+                            checked={scholarshipOnTop}
+                            onChange={(e) => setScholarshipOnTop(e.target.checked)}
+                            className="mt-0.5"
+                          />
+                          <span>
+                            <span className="font-medium">
+                              {t("onboarding.csv.scholarshipOnTop")}
+                            </span>
+                            <span className="block text-muted">
+                              {t("onboarding.csv.scholarshipOnTopHint")}
+                            </span>
+                          </span>
+                        </label>
+                      )}
+
+                      <label className="flex items-start gap-2 text-xs text-ink">
+                        <input
+                          type="checkbox"
+                          checked={updateExisting}
+                          onChange={(e) => setUpdateExisting(e.target.checked)}
+                          className="mt-0.5"
+                        />
+                        <span>
+                          <span className="font-medium">
+                            {t("onboarding.csv.updateExisting")}
+                          </span>
+                          <span className="block text-muted">
+                            {t("onboarding.csv.updateExistingHint")}
+                          </span>
+                        </span>
+                      </label>
+                    </div>
+                  )}
+                </section>
+              )}
+
+              {/* Rows the server refused on the last import attempt. */}
+              {failures && failures.length > 0 && (
+                <section className="rounded-md border border-danger/40 bg-lavender/40 p-3">
+                  <h3 className="mb-2 text-sm font-semibold text-danger">
+                    {t("onboarding.csv.failuresTitle", { count: failures.length })}
+                  </h3>
+                  <ul className="max-h-40 overflow-auto text-xs text-ink">
+                    {failures.map((f) => (
+                      <li key={f.row}>
+                        {t("onboarding.csv.rowLabel")} {f.row}:{" "}
+                        {t(`onboarding.errors.${f.reason}`)}
+                        {f.detail ? ` (${f.detail})` : ""}
+                      </li>
+                    ))}
+                  </ul>
+                </section>
+              )}
+
               {/* Step 3: preview + validation */}
               <section>
                 <div className="mb-2 flex flex-wrap items-center gap-3">
@@ -443,6 +684,11 @@ export function CsvImport({
                         <th className="px-3 py-2 font-medium">
                           {t("onboarding.csv.fieldYear")}
                         </th>
+                        {mappedFeeTargets.length > 0 && (
+                          <th className="px-3 py-2 text-right font-medium">
+                            {t("onboarding.csv.fieldFeeBalance")}
+                          </th>
+                        )}
                         <th className="px-3 py-2 font-medium">
                           {t("onboarding.csv.statusOk")}
                         </th>
@@ -482,6 +728,9 @@ export function CsvImport({
                             <td className="px-3 py-1.5 text-muted">
                               {resolvedYears[i] || "—"}
                             </td>
+                            {mappedFeeTargets.length > 0 && (
+                              <FeeBalanceCell result={feeResults[i]} />
+                            )}
                             <td className="px-3 py-1.5">
                               {err ? (
                                 <span className="text-danger">
@@ -515,7 +764,11 @@ export function CsvImport({
           <button
             type="button"
             onClick={doImport}
-            disabled={pending || validRows.length === 0}
+            disabled={
+              pending ||
+              validRows.length === 0 ||
+              (mappedFeeTargets.length > 0 && !feeDate)
+            }
             className="rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary-hover disabled:opacity-50"
           >
             {pending
@@ -525,5 +778,38 @@ export function CsvImport({
         </div>
       </div>
     </div>
+  );
+}
+
+/**
+ * Net ledger effect of one row (paid − charged): negative = still owes. The
+ * tooltip lists the individual entries that will be posted.
+ */
+function FeeBalanceCell({
+  result,
+}: {
+  result: ReturnType<typeof buildFeeLines> | undefined;
+}) {
+  const t = useT();
+  if (!result || !result.ok) {
+    return <td className="px-3 py-1.5 text-right text-danger">—</td>;
+  }
+  if (result.lines.length === 0) {
+    return <td className="px-3 py-1.5 text-right text-muted">—</td>;
+  }
+  const balance = feeLinesBalance(result.lines);
+  const detail = result.lines
+    .map(
+      (l) =>
+        `${t(l.category.labelKey)}: ${l.type === "charge" ? "" : "−"}${formatCurrency(l.amount)}`,
+    )
+    .join("\n");
+  return (
+    <td
+      title={detail}
+      className={`px-3 py-1.5 text-right tabular-nums ${balanceToneClass(balance)}`}
+    >
+      {formatCurrency(balance)}
+    </td>
   );
 }

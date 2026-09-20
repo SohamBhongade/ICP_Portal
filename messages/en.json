@@ -178,7 +178,7 @@
     },
     "csv": {
       "title": "Bulk import students",
-      "dropHint": "Drag and drop a CSV file here, or click to browse.",
+      "dropHint": "Drag and drop a CSV or Excel (.xlsx) file here, or click to browse.",
       "fileSelected": "{name} — {count} rows",
       "reset": "Choose a different file",
       "mapTitle": "Map columns",
@@ -213,9 +213,24 @@
         "cellTooLong": "One of the cells is longer than 500 characters. Shorten it and try again.",
         "noRows": "No student rows were found in that file.",
         "noHeaders": "No column headings were found. The first row must name the columns.",
-        "corruptFile": "That file couldn't be opened. Re-save it and try again."
+        "corruptFile": "That file couldn't be opened. Re-save it and try again.",
+        "feesForbidden": "You don't have permission to post fees. Remove the fee column mappings and try again.",
+        "badFeeOptions": "The fee options couldn't be read. Check the ledger date and note, then try again."
       },
-      "customTag": "Custom"
+      "customTag": "Custom",
+      "feesTitle": "Fee columns → student ledger",
+      "feesHint": "Optional. Map fee columns to post them to each student's fee ledger. Every non-zero amount becomes one ledger entry; blank or 0 cells are skipped.",
+      "feeCharge": "Charge",
+      "feeCredit": "Credit",
+      "feeDate": "Ledger date",
+      "feeNote": "Note (optional)",
+      "feeNotePlaceholder": "e.g. AY 2024-25",
+      "scholarshipOnTop": "Tuition column shows only the student's share",
+      "scholarshipOnTopHint": "Adds the scholarship to the tuition charge, then credits it — so a student with Tuition 0 and Scholarship 45,455 is charged 45,455 and credited 45,455. Untick if the tuition column already holds the full fee.",
+      "updateExisting": "Also post fees to students who already exist",
+      "updateExistingHint": "Matches by roll number AND name. Entries already posted with the same date and amount are skipped, so re-uploading the same file won't double-charge.",
+      "fieldFeeBalance": "Fee balance",
+      "failuresTitle": "{count} rows were skipped"
     },
     "errors": {
       "missingName": "Full name is required",
@@ -229,7 +244,9 @@
       "duplicate": "An account with this roll number or email already exists",
       "forbidden": "You do not have permission to do this.",
       "notFound": "That account no longer exists.",
-      "unknown": "Something went wrong. Please try again."
+      "unknown": "Something went wrong. Please try again.",
+      "invalidFee": "A fee amount isn't a valid number",
+      "nameMismatch": "Roll number exists but belongs to a student with a different name — fees not posted"
     },
     "toast": {
       "created": "{name} was added successfully.",
@@ -242,7 +259,8 @@
       "cannotDeleteSelf": "You can't delete your own account.",
       "updated": "{name}'s details were updated.",
       "updatedWithPassword": "{name}'s details were updated and the account is now active. Password: {password} — share it with them now; it will not be shown again.",
-      "updateFailed": "Could not save the changes."
+      "updateFailed": "Could not save the changes.",
+      "feesPosted": "Posted {entries} fee entries ({updated} existing students updated, {already} already up to date)."
     },
     "tableRegion": "Users table. Use arrow keys to scroll.",
     "noResultsHint": "Try clearing a filter or shortening your search.",
