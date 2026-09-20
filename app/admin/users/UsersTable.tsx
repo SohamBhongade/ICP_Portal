@@ -52,10 +52,10 @@ import {
 
 type Translator = ReturnType<typeof useT>;
 
-/** Shared cell chrome. Padding is deliberately generous (comfortable density). */
-const CELL = "border-b border-line px-4 py-3 align-middle";
+/** Shared cell chrome. Compact padding so more columns fit on a laptop screen. */
+const CELL = "border-b border-line px-3 py-2.5 align-middle";
 const HEAD_CELL =
-  "border-b border-line bg-canvas px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-muted";
+  "border-b border-line bg-canvas px-3 py-3 text-left text-xs font-semibold uppercase tracking-wide text-muted";
 
 /** Below this the grid switches to the card list — see the note on UsersCardList. */
 const TABLE_MEDIA_QUERY = "(min-width: 768px)";
@@ -176,7 +176,11 @@ function UsersGrid({
   useEffect(syncEdges, [syncEdges, columns, rows.length, canManage]);
 
   return (
-    <div className="overflow-hidden rounded-lg border border-line bg-surface shadow-sm">
+    // `isolate` gives the grid its own stacking context, so the frozen cells'
+    // z-20…z-40 layers stay INSIDE the table. Without it they compete with the
+    // app's global layers and the frozen header corner paints over the
+    // slide-out sidebar.
+    <div className="isolate overflow-hidden rounded-lg border border-line bg-surface shadow-sm">
       <div
         ref={scrollRef}
         data-edge-left={edge.left}
@@ -212,7 +216,7 @@ function UsersGrid({
                   scope="col"
                   // z-40: the top-left corner outranks both the sticky header
                   // row and the frozen body cells it crosses.
-                  className={`${HEAD_CELL} sticky top-0 z-40 ${
+                  className={`${HEAD_CELL} sticky top-0 z-40 whitespace-nowrap ${
                     i === leftKeys.length - 1 ? "dt-pin-left-edge" : ""
                   }`}
                   style={{ left: leftOffsets[i] }}
@@ -505,6 +509,8 @@ function columnText(
       return u.course ?? "—";
     case "className":
       return u.className ?? "—";
+    case "admissionYear":
+      return u.admissionYear != null ? String(u.admissionYear) : "—";
     case "status":
       return t(STATUS_LABEL[u.status]);
     case "joinedDate":
@@ -553,13 +559,16 @@ function CellValue({
   const numeric =
     column === "joinedDate" ||
     column === "rollNo" ||
+    column === "admissionYear" ||
     field?.type === "number" ||
     field?.type === "date";
 
   return (
     <span
       title={text}
-      className={`block truncate ${custom ? "text-muted" : tone} ${
+      // The name wraps onto a second line instead of truncating, so a long full
+      // name stays readable in a column sized for the rest of the grid to fit.
+      className={`block ${column === "name" ? "line-clamp-2 break-words" : "truncate"} ${custom ? "text-muted" : tone} ${
         numeric ? "[font-variant-numeric:tabular-nums]" : ""
       }`}
     >

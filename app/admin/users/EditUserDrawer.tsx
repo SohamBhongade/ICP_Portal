@@ -25,6 +25,7 @@ import {
   type FieldErrors,
 } from "@/lib/validation/client";
 import { setUserFieldValueAction } from "@/app/actions/user-fields";
+import { parseAdmissionYear } from "@/lib/academic-year";
 import {
   validateFieldValue,
   type CustomField,
@@ -124,6 +125,13 @@ export function EditUserDrawer({
     matchOptionValue(user.practicalBatch ?? "", batchOptions),
   );
   const [status, setStatus] = useState<UserRow["status"]>(user.status);
+  // Free text so "2024-25" can be typed as-is; saved as the earlier year.
+  const [admissionYear, setAdmissionYear] = useState(
+    user.admissionYear != null ? String(user.admissionYear) : "",
+  );
+  const parsedAdmissionYear = parseAdmissionYear(admissionYear);
+  const admissionYearInvalid =
+    admissionYear.trim() !== "" && parsedAdmissionYear == null;
 
   // Custom column values, seeded from the row. Keyed by FIELD key.
   const [customValues, setCustomValues] = useState<Record<string, string>>(
@@ -154,6 +162,7 @@ export function EditUserDrawer({
         course,
         className,
         practicalBatch,
+        ...(isStudent ? { admissionYear: parsedAdmissionYear } : {}),
         status,
       });
       if (result.ok) {
@@ -310,6 +319,28 @@ export function EditUserDrawer({
                   placeholder={t("onboarding.create.selectPlaceholder")}
                 />
               </Field>
+              <Field
+                label={t("onboarding.create.admissionYear")}
+                htmlFor="eu-admission"
+                optional={t("onboarding.create.optional")}
+              >
+                <input
+                  id="eu-admission"
+                  inputMode="numeric"
+                  value={admissionYear}
+                  onChange={(e) => setAdmissionYear(e.target.value)}
+                  placeholder={t("onboarding.create.admissionYearPlaceholder")}
+                  aria-invalid={admissionYearInvalid}
+                  className={inputClass}
+                />
+                <p
+                  className={`mt-1 text-xs ${admissionYearInvalid ? "text-danger" : "text-muted"}`}
+                >
+                  {admissionYearInvalid
+                    ? t("onboarding.create.admissionYearInvalid")
+                    : t("onboarding.create.admissionYearHint")}
+                </p>
+              </Field>
               <Field label={t("onboarding.create.practicalBatch")}>
                 <EditableDropdown
                   category="practical_batch"
@@ -415,7 +446,7 @@ export function EditUserDrawer({
             </button>
             <button
               type="submit"
-              disabled={pending || !!customIssue}
+              disabled={pending || !!customIssue || admissionYearInvalid}
               className="rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary-hover disabled:opacity-50"
             >
               {pending

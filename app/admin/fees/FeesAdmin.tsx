@@ -37,6 +37,8 @@ import {
 } from "@/lib/fees";
 import { fieldErrorSuffix } from "@/lib/validation/client";
 import { todayIso } from "@/lib/dates";
+import { extractYear } from "@/lib/courses";
+import { studyYearLabelKey } from "@/lib/academic-year";
 
 type Student = {
   id: number;
@@ -44,7 +46,27 @@ type Student = {
   studentId: string | null;
   course: string | null;
   className: string | null;
+  year: number | null;
+  admissionYear: number | null;
 };
+
+/**
+ * The identity line under a student's name, in the order the office reads it:
+ * roll number, year of admission, then current year of study.
+ *   "Roll 12 · Adm. 2024 · 1st year"
+ * Year of study falls back to the class text for rows that predate the
+ * derived `year` column.
+ */
+function studentFacts(s: Student, t: ReturnType<typeof useT>): string[] {
+  const studyYear = s.year ?? extractYear(s.className).year;
+  return [
+    s.studentId ? t("fees.rollNo", { roll: s.studentId }) : null,
+    s.admissionYear != null
+      ? t("fees.admissionYear", { year: s.admissionYear })
+      : null,
+    studyYear != null ? t(studyYearLabelKey(studyYear)) : s.className,
+  ].filter((v): v is string => Boolean(v));
+}
 
 
 export function FeesAdmin({ students }: { students: Student[] }) {
@@ -139,8 +161,7 @@ export function FeesAdmin({ students }: { students: Student[] }) {
                         {s.fullName}
                       </span>
                       <span className="block truncate text-xs text-muted">
-                        {[s.studentId, s.className].filter(Boolean).join(" · ") ||
-                          "—"}
+                        {studentFacts(s, t).join(" · ") || "—"}
                       </span>
                     </button>
                   </li>
@@ -164,7 +185,7 @@ export function FeesAdmin({ students }: { students: Student[] }) {
                     {selected.fullName}
                   </h2>
                   <p className="text-sm text-muted">
-                    {[selected.studentId, selected.course, selected.className]
+                    {[...studentFacts(selected, t), selected.course]
                       .filter(Boolean)
                       .join(" · ") || "—"}
                   </p>

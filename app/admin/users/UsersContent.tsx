@@ -9,6 +9,8 @@
 import { useCallback, useEffect, useMemo, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import {
+  ChevronDown,
+  Funnel,
   Plus,
   Search,
   SlidersHorizontal,
@@ -32,6 +34,8 @@ import {
   type UsersTableLayout,
 } from "@/lib/table-layout";
 import { customColumnKey } from "@/lib/user-fields";
+import { extractYear } from "@/lib/courses";
+import { STUDY_YEARS, studyYearLabelKey } from "@/lib/academic-year";
 import { ColumnManager } from "./ColumnManager";
 import { CreateUserDrawer } from "./CreateUserDrawer";
 import { CsvImport } from "./CsvImport";
@@ -91,6 +95,38 @@ export function UsersContent({
   const [roleFilter, setRoleFilter] = useState("");
   const [courseFilter, setCourseFilter] = useState("");
   const [classFilter, setClassFilter] = useState("");
+  const [yearFilter, setYearFilter] = useState(""); // year of study, "1".."4"
+  const [admissionFilter, setAdmissionFilter] = useState(""); // e.g. "2024"
+  // The filter panel is collapsed by default so the grid gets the full width;
+  // a toolbar button opens it.
+  const [filtersOpen, setFiltersOpen] = useState(false);
+  const activeFilterCount = [
+    roleFilter,
+    courseFilter,
+    classFilter,
+    yearFilter,
+    admissionFilter,
+  ].filter(Boolean).length;
+  const clearFilters = () => {
+    setRoleFilter("");
+    setCourseFilter("");
+    setClassFilter("");
+    setYearFilter("");
+    setAdmissionFilter("");
+  };
+
+  // Admission years that actually occur, newest first, for the filter.
+  const admissionYears = useMemo(
+    () =>
+      Array.from(
+        new Set(
+          users
+            .map((u) => u.admissionYear)
+            .filter((y): y is number => y != null),
+        ),
+      ).sort((a, b) => b - a),
+    [users],
+  );
 
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [csvOpen, setCsvOpen] = useState(false);
@@ -184,6 +220,10 @@ export function UsersContent({
       if (roleFilter && u.role !== roleFilter) return false;
       if (courseFilter && u.course !== courseFilter) return false;
       if (classFilter && u.className !== classFilter) return false;
+      if (yearFilter && String(studyYearOf(u) ?? "") !== yearFilter) return false;
+      if (admissionFilter && String(u.admissionYear ?? "") !== admissionFilter) {
+        return false;
+      }
       if (!q) return true;
       return (
         u.fullName.toLowerCase().includes(q) ||
@@ -191,7 +231,15 @@ export function UsersContent({
         (u.email?.toLowerCase().includes(q) ?? false)
       );
     });
-  }, [users, search, roleFilter, courseFilter, classFilter]);
+  }, [
+    users,
+    search,
+    roleFilter,
+    courseFilter,
+    classFilter,
+    yearFilter,
+    admissionFilter,
+  ]);
 
   // CLEAR THE SELECTION WHENEVER THE RESULT SET MOVES.
   //
@@ -215,6 +263,8 @@ export function UsersContent({
     roleFilter,
     courseFilter,
     classFilter,
+    yearFilter,
+    admissionFilter,
   ]);
   const [lastFilterSignature, setLastFilterSignature] = useState(filterSignature);
   if (lastFilterSignature !== filterSignature) {
@@ -338,55 +388,11 @@ export function UsersContent({
         </div>
       </div>
 
-      <div className="flex flex-col gap-6 lg:flex-row">
-        {/* Sidebar filters */}
-        <aside className="w-full shrink-0 lg:w-60">
-          <div className="rounded-lg border border-line bg-surface p-4 shadow-sm">
-            <h2 className="mb-3 text-sm font-semibold text-ink">
-              {t("onboarding.filters")}
-            </h2>
-            <div className="flex flex-col gap-3">
-              <FilterSelect
-                label={t("onboarding.filterRole")}
-                value={roleFilter}
-                onChange={setRoleFilter}
-                allLabel={t("onboarding.allRoles")}
-                options={[
-                  { value: "student", label: t("onboarding.roleStudent") },
-                  { value: "faculty", label: t("onboarding.roleFaculty") },
-                  { value: "staff", label: t("onboarding.roleStaff") },
-                  { value: "office admin", label: t("onboarding.roleOfficeAdmin") },
-                  { value: "principal", label: t("onboarding.rolePrincipal") },
-                  { value: "admin", label: t("onboarding.roleAdmin") },
-                ]}
-              />
-              <FilterSelect
-                label={t("onboarding.filterCourse")}
-                value={courseFilter}
-                onChange={setCourseFilter}
-                allLabel={t("onboarding.allCourses")}
-                options={courseOptions.map((o) => ({
-                  value: o.value,
-                  label: o.label,
-                }))}
-              />
-              <FilterSelect
-                label={t("onboarding.filterClass")}
-                value={classFilter}
-                onChange={setClassFilter}
-                allLabel={t("onboarding.allClasses")}
-                options={classOptions.map((o) => ({
-                  value: o.value,
-                  label: o.label,
-                }))}
-              />
-            </div>
-          </div>
-        </aside>
-
-        {/* Main: search + table */}
-        <section className="min-w-0 flex-1">
-          <div className="relative mb-4">
+      {/* Search + filter toggle. Filters live behind a button so the grid
+          keeps the full page width when they aren't needed. */}
+      <section className="min-w-0">
+        <div className="mb-4 flex flex-wrap items-center gap-2">
+          <div className="relative min-w-60 flex-1">
             <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted" />
             <input
               type="search"
@@ -397,82 +403,176 @@ export function UsersContent({
               className="w-full rounded-md border border-line bg-surface py-2 pl-9 pr-3 text-sm text-ink focus:border-teal"
             />
           </div>
-
-          <p className="mb-3 text-sm font-medium text-muted [font-variant-numeric:tabular-nums]">
-            {filtered.length === 1
-              ? t("onboarding.resultsCountSingular")
-              : t("onboarding.resultsCountPlural", { count: filtered.length })}
-          </p>
-
-          {/* Persistent selection toolbar. Present whenever anything is
-              selected, and it never leaves the filter's scope ambiguous — the
-              count always reads "N of M filtered". */}
-          {canSelect && selectedRows.length > 0 && (
-            <div className="mb-3 flex flex-wrap items-center gap-3 rounded-lg border border-primary/30 bg-lavender px-4 py-3">
-              <span className="text-sm font-semibold text-primary [font-variant-numeric:tabular-nums]">
-                {t("onboarding.bulk.selectedCount", {
-                  count: selectedRows.length,
-                  total: filtered.length,
-                })}
+          <button
+            type="button"
+            onClick={() => setFiltersOpen((open) => !open)}
+            aria-expanded={filtersOpen}
+            aria-controls="users-filters"
+            className={`inline-flex cursor-pointer items-center gap-2 rounded-md border px-3 py-2 text-sm font-medium hover:bg-lavender ${
+              activeFilterCount > 0
+                ? "border-primary/40 bg-lavender text-primary"
+                : "border-line bg-surface text-ink"
+            }`}
+          >
+            <Funnel className="size-4" aria-hidden />
+            {t("onboarding.filters")}
+            {activeFilterCount > 0 && (
+              <span className="rounded-full bg-primary px-1.5 text-xs text-primary-foreground [font-variant-numeric:tabular-nums]">
+                {activeFilterCount}
               </span>
-              {selectedRows.length < filtered.length && (
-                <button
-                  type="button"
-                  onClick={() => toggleAllFiltered(true)}
-                  className="cursor-pointer text-sm font-medium text-teal underline-offset-2 hover:underline"
-                >
-                  {t("onboarding.bulk.selectAllFiltered", {
-                    count: filtered.length,
-                  })}
-                </button>
-              )}
+            )}
+            <ChevronDown
+              className={`size-4 transition-transform ${filtersOpen ? "rotate-180" : ""}`}
+              aria-hidden
+            />
+          </button>
+          {activeFilterCount > 0 && (
+            <button
+              type="button"
+              onClick={clearFilters}
+              className="cursor-pointer text-sm font-medium text-muted underline-offset-2 hover:text-ink hover:underline"
+            >
+              {t("onboarding.clearFilters")}
+            </button>
+          )}
+        </div>
+
+        {filtersOpen && (
+          <div
+            id="users-filters"
+            className="mb-4 grid gap-3 rounded-lg border border-line bg-surface p-4 shadow-sm sm:grid-cols-2 lg:grid-cols-5"
+          >
+            <FilterSelect
+              label={t("onboarding.filterRole")}
+              value={roleFilter}
+              onChange={setRoleFilter}
+              allLabel={t("onboarding.allRoles")}
+              options={[
+                { value: "student", label: t("onboarding.roleStudent") },
+                { value: "faculty", label: t("onboarding.roleFaculty") },
+                { value: "staff", label: t("onboarding.roleStaff") },
+                { value: "office admin", label: t("onboarding.roleOfficeAdmin") },
+                { value: "principal", label: t("onboarding.rolePrincipal") },
+                { value: "admin", label: t("onboarding.roleAdmin") },
+              ]}
+            />
+            <FilterSelect
+              label={t("onboarding.filterCourse")}
+              value={courseFilter}
+              onChange={setCourseFilter}
+              allLabel={t("onboarding.allCourses")}
+              options={courseOptions.map((o) => ({
+                value: o.value,
+                label: o.label,
+              }))}
+            />
+            <FilterSelect
+              label={t("onboarding.filterYear")}
+              value={yearFilter}
+              onChange={setYearFilter}
+              allLabel={t("onboarding.allYears")}
+              options={STUDY_YEARS.map((y) => ({
+                value: String(y),
+                label: t(studyYearLabelKey(y)),
+              }))}
+            />
+            <FilterSelect
+              label={t("onboarding.filterAdmissionYear")}
+              value={admissionFilter}
+              onChange={setAdmissionFilter}
+              allLabel={t("onboarding.allAdmissionYears")}
+              options={admissionYears.map((y) => ({
+                value: String(y),
+                label: String(y),
+              }))}
+            />
+            <FilterSelect
+              label={t("onboarding.filterClass")}
+              value={classFilter}
+              onChange={setClassFilter}
+              allLabel={t("onboarding.allClasses")}
+              options={classOptions.map((o) => ({
+                value: o.value,
+                label: o.label,
+              }))}
+            />
+          </div>
+        )}
+
+        <p className="mb-3 text-sm font-medium text-muted [font-variant-numeric:tabular-nums]">
+          {filtered.length === 1
+            ? t("onboarding.resultsCountSingular")
+            : t("onboarding.resultsCountPlural", { count: filtered.length })}
+        </p>
+
+        {/* Persistent selection toolbar. Present whenever anything is
+            selected, and it never leaves the filter's scope ambiguous — the
+            count always reads "N of M filtered". */}
+        {canSelect && selectedRows.length > 0 && (
+          <div className="mb-3 flex flex-wrap items-center gap-3 rounded-lg border border-primary/30 bg-lavender px-4 py-3">
+            <span className="text-sm font-semibold text-primary [font-variant-numeric:tabular-nums]">
+              {t("onboarding.bulk.selectedCount", {
+                count: selectedRows.length,
+                total: filtered.length,
+              })}
+            </span>
+            {selectedRows.length < filtered.length && (
               <button
                 type="button"
-                onClick={() => setSelected(new Set())}
-                className="cursor-pointer text-sm font-medium text-muted underline-offset-2 hover:text-ink hover:underline"
+                onClick={() => toggleAllFiltered(true)}
+                className="cursor-pointer text-sm font-medium text-teal underline-offset-2 hover:underline"
               >
-                {t("onboarding.bulk.clear")}
+                {t("onboarding.bulk.selectAllFiltered", {
+                  count: filtered.length,
+                })}
               </button>
-              <span className="ml-auto flex items-center gap-3">
-                {/* The scope is spelled out again next to the destructive
-                    button, because that is where it actually matters. */}
-                <span className="hidden text-xs text-muted sm:inline">
-                  {t("onboarding.bulk.scopeNote")}
-                </span>
-                <button
-                  type="button"
-                  onClick={() => setBulkOpen(true)}
-                  className="inline-flex cursor-pointer items-center gap-1.5 rounded-md bg-danger px-3 py-1.5 text-sm font-medium text-white hover:opacity-90"
-                >
-                  <Trash2 className="size-3.5" />
-                  {t("onboarding.bulk.deleteSelected", {
-                    count: selectedRows.length,
-                  })}
-                </button>
+            )}
+            <button
+              type="button"
+              onClick={() => setSelected(new Set())}
+              className="cursor-pointer text-sm font-medium text-muted underline-offset-2 hover:text-ink hover:underline"
+            >
+              {t("onboarding.bulk.clear")}
+            </button>
+            <span className="ml-auto flex items-center gap-3">
+              {/* The scope is spelled out again next to the destructive
+                  button, because that is where it actually matters. */}
+              <span className="hidden text-xs text-muted sm:inline">
+                {t("onboarding.bulk.scopeNote")}
               </span>
-            </div>
-          )}
+              <button
+                type="button"
+                onClick={() => setBulkOpen(true)}
+                className="inline-flex cursor-pointer items-center gap-1.5 rounded-md bg-danger px-3 py-1.5 text-sm font-medium text-white hover:opacity-90"
+              >
+                <Trash2 className="size-3.5" />
+                {t("onboarding.bulk.deleteSelected", {
+                  count: selectedRows.length,
+                })}
+              </button>
+            </span>
+          </div>
+        )}
 
-          <UsersTable
-            rows={filtered}
-            columns={visibleColumns}
-            customFields={customFields}
-            totalCount={users.length}
-            canEditStudents={canEditStudents}
-            canDelete={canDelete}
-            onEdit={openEdit}
-            onDelete={openDelete}
-            selection={selection}
-          />
+        <UsersTable
+          rows={filtered}
+          columns={visibleColumns}
+          customFields={customFields}
+          totalCount={users.length}
+          canEditStudents={canEditStudents}
+          canDelete={canDelete}
+          onEdit={openEdit}
+          onDelete={openDelete}
+          selection={selection}
+        />
 
-          <p className="mt-3 text-xs text-muted">
-            {t("onboarding.showing", {
-              count: filtered.length,
-              total: users.length,
-            })}
-          </p>
-        </section>
-      </div>
+        <p className="mt-3 text-xs text-muted">
+          {t("onboarding.showing", {
+            count: filtered.length,
+            total: users.length,
+          })}
+        </p>
+      </section>
 
       {drawerOpen && canCreateUsers && (
         <CreateUserDrawer
@@ -707,6 +807,14 @@ function DeleteConfirm({
       </div>
     </div>
   );
+}
+
+/**
+ * A student's year of study (1–4): the stored value, or — for rows imported
+ * before it was derived — read out of the class text ("First Year" -> 1).
+ */
+function studyYearOf(u: UserRow): number | null {
+  return u.year ?? extractYear(u.className).year;
 }
 
 function FilterSelect({

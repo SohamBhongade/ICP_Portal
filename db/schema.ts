@@ -53,6 +53,9 @@ export const users = sqliteTable("users", {
     .default("student"),
   course: text("course"), // canonical value from lib/courses normalization
   year: integer("year"), // academic year 1–4 (students); null when unknown
+  // Calendar year the student was admitted, e.g. 2024 for "2024-25". Students
+  // only; null when unknown. See lib/academic-year.ts for how it is parsed.
+  admissionYear: integer("admission_year"),
   className: text("class_name"),
   practicalBatch: text("practical_batch"), // 'Batch A' etc — students only
   // Staff/faculty professional details (null for students). Captured by the

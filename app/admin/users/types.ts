@@ -17,6 +17,10 @@ export type UserRow = {
   course: string | null;
   className: string | null;
   practicalBatch: string | null;
+  /** Year of study, 1–4 (students); null when unknown. */
+  year: number | null;
+  /** Calendar year of admission, e.g. 2024; null when unknown. */
+  admissionYear: number | null;
   status: "pending" | "active" | "rejected";
   // Joined date — a Date across the RSC boundary, but tolerate string/number.
   createdAt: Date | string | number | null;

@@ -20,6 +20,8 @@ export default async function AdminFeesPage() {
       studentId: users.studentId,
       course: users.course,
       className: users.className,
+      year: users.year,
+      admissionYear: users.admissionYear,
     })
     .from(users)
     .where(eq(users.role, "student"))

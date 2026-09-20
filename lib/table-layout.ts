@@ -37,6 +37,7 @@ export const USERS_COLUMN_KEYS = [
   "role",
   "course",
   "className",
+  "admissionYear",
   "status",
   "joinedDate",
 ] as const;
@@ -76,6 +77,7 @@ export const USERS_COLUMN_LABEL_KEY: Record<UsersColumnKey, string> = {
   role: "onboarding.colRole",
   course: "onboarding.colCourse",
   className: "onboarding.colClass",
+  admissionYear: "onboarding.colAdmissionYear",
   status: "onboarding.colStatus",
   joinedDate: "onboarding.colJoined",
 };
@@ -172,24 +174,32 @@ export function sanitizeUsersTableLayout(
 /** Structural (non-customizable) columns that bracket the customizable set. */
 export type UsersStructuralKey = "select" | "actions";
 
-/** Fixed px width for every built-in / structural column. */
+/**
+ * Fixed px width for every built-in / structural column.
+ *
+ * Sized to the CONTENT, so a laptop screen shows most of the grid without
+ * scrolling: the roll number only needs to fit a short code, while the name
+ * gets the most room (and wraps onto a second line rather than truncating, so
+ * a long full name is always readable — see CellValue).
+ */
 const BUILT_IN_WIDTH: Record<UsersColumnKey | UsersStructuralKey, number> = {
-  select: 48,
-  rollNo: 132,
-  name: 208,
-  email: 240,
-  phone: 148,
-  role: 132,
-  course: 148,
-  className: 132,
-  status: 128,
-  joinedDate: 148,
-  actions: 108,
+  select: 40,
+  rollNo: 100,
+  name: 224,
+  email: 200,
+  phone: 124,
+  role: 92,
+  course: 96,
+  className: 112,
+  admissionYear: 108,
+  status: 96,
+  joinedDate: 112,
+  actions: 88,
 };
 
 /** Width used by every admin-defined column. One value, so the frozen offsets
  *  stay computable without measuring a header an admin can rename at will. */
-export const CUSTOM_COLUMN_WIDTH = 168;
+export const CUSTOM_COLUMN_WIDTH = 148;
 
 /** Authoritative render width for any column key. */
 export function columnWidth(key: string): number {

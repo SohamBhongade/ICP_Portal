@@ -33,6 +33,7 @@ import { feeLedgers, userFieldValues, users } from "@/db/schema";
 import { currentUserWithCapability } from "@/lib/auth";
 import { can, type Role } from "@/lib/auth/permissions";
 import { todayIso } from "@/lib/dates";
+import { parseAdmissionYear } from "@/lib/academic-year";
 import type { FeeCategory } from "@/lib/fees";
 import {
   buildFeeLines,
@@ -68,6 +69,7 @@ const TARGET_FIELDS = [
   "course",
   "className",
   "practicalBatch",
+  "admissionYear",
 ] as const;
 export type BuiltInTargetField = (typeof TARGET_FIELDS)[number];
 
@@ -150,11 +152,6 @@ const feeOptionsSchema = z.strictObject({
   /** Optional note appended to particulars, e.g. "AY 2024-25". */
   note: z.string().trim().max(LIMITS.shortText).default(""),
   scholarshipOnTop: z.boolean().default(true),
-  /**
-   * Post fees to students who ALREADY exist (matched by roll number AND name)
-   * instead of reporting them as duplicates. Off by default.
-   */
-  updateExisting: z.boolean().default(false),
 });
 type FeeOptions = z.infer<typeof feeOptionsSchema>;
 
@@ -201,12 +198,12 @@ export type ImportResult =
   | {
       ok: true;
       created: number;
-      /** Existing students who received fee entries (updateExisting only). */
+      /** Existing students updated (admission year and/or fees) — updateExisting only. */
       updated: number;
       /** Ledger rows written, across new and existing students. */
       feeEntries: number;
-      /** Existing students skipped because this exact entry was already posted. */
-      alreadyPosted: number;
+      /** Existing students matched but already up to date (nothing to change). */
+      unchanged: number;
       failed: RowFailure[];
     }
   | { ok: false; error: ImportError; retryAfter?: number };
@@ -347,6 +344,10 @@ export async function importStudentsFileAction(
     feeOptions = optionsParsed.data;
   }
 
+  // Update students who already exist (matched by roll number AND name)
+  // instead of reporting them as duplicates. Off unless the operator ticks it.
+  const updateExisting = formData.get("updateExisting") === "true";
+
   // RE-PARSE. The preview's rows went through the client and are not trusted.
   const parsed = await parseImportFile(file);
   if (!parsed.ok) return { ok: false, error: parsed.reason };
@@ -357,6 +358,7 @@ export async function importStudentsFileAction(
     customTargets,
     feeTargets,
     feeOptions,
+    updateExisting,
     actor.id,
   );
 }
@@ -413,12 +415,13 @@ async function insertRows(
   customTargets: CustomField[],
   feeTargets: FeeCategory[],
   feeOptions: FeeOptions | null,
+  updateExisting: boolean,
   actorId: number,
 ): Promise<ImportResult> {
   let created = 0;
   let updated = 0;
   let feeEntries = 0;
-  let alreadyPosted = 0;
+  let unchanged = 0;
   const failed: RowFailure[] = [];
   const buildOptions: FeeImportOptions = {
     scholarshipOnTop: feeOptions?.scholarshipOnTop ?? true,
@@ -452,6 +455,9 @@ async function insertRows(
     }
     const norm = normalizeCourse(r.course);
     const year = norm.year ?? extractYear(r.className ?? "").year ?? undefined;
+    // "2024-25" / "2024-2025" -> 2024. An unreadable cell is simply left blank
+    // rather than costing the student their account.
+    const admissionYear = parseAdmissionYear(r.admissionYear) ?? undefined;
 
     // Fee cells are validated BEFORE anything is written, so a typo like
     // "45,45S" fails the row cleanly instead of creating a student whose
@@ -483,7 +489,31 @@ async function insertRows(
         year,
         className: r.className?.trim() || undefined,
         practicalBatch: r.practicalBatch?.trim() || undefined,
+        admissionYear,
         passwordHash,
+      };
+
+      // A roll number that already exists: either update that student (when
+      // the operator asked for it) or report the row as a duplicate.
+      const handleExisting = async () => {
+        if (!updateExisting) {
+          failed.push({ row: rowNo, reason: "duplicate" });
+          return;
+        }
+        const outcome = await updateExistingStudent(
+          studentId,
+          fullName,
+          { admissionYear, feeLines, feeOptions },
+          actorId,
+        );
+        if (outcome.kind === "updated") {
+          updated++;
+          feeEntries += outcome.entries;
+        } else if (outcome.kind === "unchanged") {
+          unchanged++;
+        } else {
+          failed.push({ row: rowNo, reason: outcome.kind });
+        }
       };
 
       if (feeLines.length === 0 || !feeOptions) {
@@ -495,7 +525,7 @@ async function insertRows(
           .returning({ id: users.id });
 
         if (res.length === 0) {
-          failed.push({ row: rowNo, reason: "duplicate" });
+          await handleExisting();
         } else {
           created++;
           await writeCustomValues(res[0].id, r, customTargets);
@@ -542,26 +572,7 @@ async function insertRows(
         continue;
       }
 
-      // Duplicate. Optionally post the fees to the existing student.
-      if (!feeOptions.updateExisting) {
-        failed.push({ row: rowNo, reason: "duplicate" });
-        continue;
-      }
-      const outcome = await postFeesToExisting(
-        studentId,
-        fullName,
-        feeLines,
-        feeOptions,
-        actorId,
-      );
-      if (outcome.kind === "posted") {
-        updated++;
-        feeEntries += outcome.entries;
-      } else if (outcome.kind === "alreadyPosted") {
-        alreadyPosted++;
-      } else {
-        failed.push({ row: rowNo, reason: outcome.kind });
-      }
+      await handleExisting();
     } catch (err) {
       logServerError("importStudentsFileAction", err, {
         row: rowNo,
@@ -571,41 +582,50 @@ async function insertRows(
     }
   }
 
-  if (created > 0) revalidatePath("/admin/users");
-  if (feeEntries > 0) {
+  if (created > 0 || updated > 0) revalidatePath("/admin/users");
+  if (feeEntries > 0 || updated > 0) {
     revalidatePath("/admin/fees");
     revalidatePath("/student/fees");
     revalidatePath("/admin");
     revalidatePath("/student");
   }
-  return { ok: true, created, updated, feeEntries, alreadyPosted, failed };
+  return { ok: true, created, updated, feeEntries, unchanged, failed };
 }
 
 type ExistingOutcome =
-  | { kind: "posted"; entries: number }
-  | { kind: "alreadyPosted" }
+  | { kind: "updated"; entries: number }
+  | { kind: "unchanged" }
   | { kind: "duplicate" | "nameMismatch" };
 
 /**
- * Post a row's fee lines onto a student who already has an account.
+ * Bring a student who already has an account up to date from the sheet:
+ * fill/correct their admission year and post the row's fee lines.
  *
  * Two guards, because roll numbers are often reused across courses/years
  * ("Roll No. 1" exists in every class):
  *   1. The roll number must belong to a STUDENT whose name matches the sheet —
  *      otherwise the row is refused as `nameMismatch` and nothing is written.
- *   2. RE-RUN SAFE: a line identical to one already on that date (same
+ *   2. RE-RUN SAFE: a fee line identical to one already on that date (same
  *      particulars, side and amount) is skipped, so uploading the same sheet
  *      twice does not double-charge anyone.
  */
-async function postFeesToExisting(
+async function updateExistingStudent(
   studentId: string,
   fullName: string,
-  lines: FeeLine[],
-  options: FeeOptions,
+  changes: {
+    admissionYear: number | undefined;
+    feeLines: FeeLine[];
+    feeOptions: FeeOptions | null;
+  },
   actorId: number,
 ): Promise<ExistingOutcome> {
   const [student] = await db
-    .select({ id: users.id, role: users.role, fullName: users.fullName })
+    .select({
+      id: users.id,
+      role: users.role,
+      fullName: users.fullName,
+      admissionYear: users.admissionYear,
+    })
     .from(users)
     .where(eq(users.studentId, studentId))
     .limit(1);
@@ -614,27 +634,46 @@ async function postFeesToExisting(
   if (!student || student.role !== "student") return { kind: "duplicate" };
   if (!sameName(student.fullName, fullName)) return { kind: "nameMismatch" };
 
-  const sameDay = await db
-    .select({
-      particulars: feeLedgers.particulars,
-      type: feeLedgers.type,
-      amount: feeLedgers.amount,
-    })
-    .from(feeLedgers)
-    .where(
-      and(eq(feeLedgers.studentId, student.id), eq(feeLedgers.date, options.date)),
+  let profileChanged = false;
+  if (
+    changes.admissionYear !== undefined &&
+    changes.admissionYear !== student.admissionYear
+  ) {
+    await db
+      .update(users)
+      .set({ admissionYear: changes.admissionYear, updatedAt: new Date() })
+      .where(eq(users.id, student.id));
+    profileChanged = true;
+  }
+
+  let entries = 0;
+  const options = changes.feeOptions;
+  if (options && changes.feeLines.length > 0) {
+    const sameDay = await db
+      .select({
+        particulars: feeLedgers.particulars,
+        type: feeLedgers.type,
+        amount: feeLedgers.amount,
+      })
+      .from(feeLedgers)
+      .where(
+        and(eq(feeLedgers.studentId, student.id), eq(feeLedgers.date, options.date)),
+      );
+    const seen = new Set(
+      sameDay.map((e) => `${e.type}|${e.particulars}|${Math.round(e.amount * 100)}`),
     );
-  const seen = new Set(
-    sameDay.map((e) => `${e.type}|${e.particulars}|${Math.round(e.amount * 100)}`),
-  );
+    const fresh = ledgerValues(student.id, changes.feeLines, options, actorId).filter(
+      (v) => !seen.has(`${v.type}|${v.particulars}|${Math.round(v.amount * 100)}`),
+    );
+    if (fresh.length > 0) {
+      await db.insert(feeLedgers).values(fresh);
+      entries = fresh.length;
+    }
+  }
 
-  const fresh = ledgerValues(student.id, lines, options, actorId).filter(
-    (v) => !seen.has(`${v.type}|${v.particulars}|${Math.round(v.amount * 100)}`),
-  );
-  if (fresh.length === 0) return { kind: "alreadyPosted" };
-
-  await db.insert(feeLedgers).values(fresh);
-  return { kind: "posted", entries: fresh.length };
+  return profileChanged || entries > 0
+    ? { kind: "updated", entries }
+    : { kind: "unchanged" };
 }
 
 /**

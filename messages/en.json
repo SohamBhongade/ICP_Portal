@@ -10,7 +10,13 @@
     "logout": "Sign out",
     "edit": "Edit",
     "add": "Add",
-    "delete": "Delete"
+    "delete": "Delete",
+    "studyYear": {
+      "1": "1st year",
+      "2": "2nd year",
+      "3": "3rd year",
+      "4": "4th year"
+    }
   },
   "editMode": {
     "label": "Edit mode",
@@ -174,7 +180,11 @@
       "submit": "Create account",
       "submitting": "Creating…",
       "cancel": "Cancel",
-      "tempPasswordNote": "A temporary password (Icp@<roll number>) is set automatically, so the account can sign in right away."
+      "tempPasswordNote": "A temporary password (Icp@<roll number>) is set automatically, so the account can sign in right away.",
+      "admissionYear": "Year of admission",
+      "admissionYearPlaceholder": "e.g. 2024 or 2024-25",
+      "admissionYearHint": "Academic years like 2024-25 are saved as 2024.",
+      "admissionYearInvalid": "Enter a year like 2024 or 2024-25."
     },
     "csv": {
       "title": "Bulk import students",
@@ -227,10 +237,11 @@
       "feeNotePlaceholder": "e.g. AY 2024-25",
       "scholarshipOnTop": "Tuition column shows only the student's share",
       "scholarshipOnTopHint": "Adds the scholarship to the tuition charge, then credits it — so a student with Tuition 0 and Scholarship 45,455 is charged 45,455 and credited 45,455. Untick if the tuition column already holds the full fee.",
-      "updateExisting": "Also post fees to students who already exist",
-      "updateExistingHint": "Matches by roll number AND name. Entries already posted with the same date and amount are skipped, so re-uploading the same file won't double-charge.",
+      "updateExisting": "Update students who already exist",
+      "updateExistingHint": "Matched by roll number AND name. Fills in their year of admission and posts any mapped fees — entries already posted with the same date and amount are skipped, so re-uploading won't double-charge. Other details are left unchanged.",
       "fieldFeeBalance": "Fee balance",
-      "failuresTitle": "{count} rows were skipped"
+      "failuresTitle": "{count} rows were skipped",
+      "fieldAdmissionYear": "Year of admission"
     },
     "errors": {
       "missingName": "Full name is required",
@@ -260,7 +271,8 @@
       "updated": "{name}'s details were updated.",
       "updatedWithPassword": "{name}'s details were updated and the account is now active. Password: {password} — share it with them now; it will not be shown again.",
       "updateFailed": "Could not save the changes.",
-      "feesPosted": "Posted {entries} fee entries ({updated} existing students updated, {already} already up to date)."
+      "feesPosted": "Posted {entries} fee entries.",
+      "existingUpdated": "Updated {updated} existing students ({unchanged} already up to date)."
     },
     "tableRegion": "Users table. Use arrow keys to scroll.",
     "noResultsHint": "Try clearing a filter or shortening your search.",
@@ -279,7 +291,13 @@
       "typeCount": "Type {count} to confirm",
       "deleted": "Deleted {count} accounts.",
       "deletedWithErrors": "Deleted {count} accounts; {failed} could not be deleted ({names})."
-    }
+    },
+    "colAdmissionYear": "Adm. Year",
+    "filterYear": "Year of study",
+    "allYears": "All years",
+    "filterAdmissionYear": "Admission year",
+    "allAdmissionYears": "All admission years",
+    "clearFilters": "Clear filters"
   },
   "attendance": {
     "recordTitle": "Record Attendance",
@@ -399,7 +417,9 @@
       "outstanding": "Outstanding balance",
       "historyTitle": "Transaction history",
       "empty": "No fee transactions yet."
-    }
+    },
+    "rollNo": "Roll {roll}",
+    "admissionYear": "Adm. {year}"
   },
   "support": {
     "student": {

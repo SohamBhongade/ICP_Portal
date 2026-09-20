@@ -52,6 +52,7 @@ import {
   feeTargetKey,
 } from "@/lib/import/fee-columns";
 import type { RowFailure } from "@/app/actions/import";
+import { parseAdmissionYear } from "@/lib/academic-year";
 import type { ToastKind } from "./UsersContent";
 
 /** Row shape after the operator's column mapping is applied (preview only). */
@@ -85,6 +86,9 @@ const FIELDS: MapTarget[] = [
   { key: "email", labelKey: "onboarding.csv.fieldEmail", required: false, guesses: ["email", "mail"] },
   { key: "phone", labelKey: "onboarding.csv.fieldPhone", required: false, guesses: ["phone", "mobile", "contact"] },
   { key: "course", labelKey: "onboarding.csv.fieldCourse", required: false, guesses: ["course", "program"] },
+  // Listed BEFORE className so "Year of admission" is claimed here and the
+  // class field's "year" guess falls through to "Year of Study".
+  { key: "admissionYear", labelKey: "onboarding.csv.fieldAdmissionYear", required: false, guesses: ["admission", "admitted"] },
   { key: "className", labelKey: "onboarding.csv.fieldClass", required: false, guesses: ["class", "year"] },
   { key: "practicalBatch", labelKey: "onboarding.csv.fieldBatch", required: false, guesses: ["batch", "practical"] },
 ];
@@ -242,6 +246,7 @@ export function CsvImport({
         course: get("course") || undefined,
         className: get("className") || undefined,
         practicalBatch: get("practicalBatch") || undefined,
+        admissionYear: get("admissionYear") || undefined,
       };
       // Custom columns ride along under their `custom:<key>` target so the
       // preview and the server see the identical shape.
@@ -349,10 +354,10 @@ export function CsvImport({
             date: feeDate,
             note: feeNote,
             scholarshipOnTop,
-            updateExisting,
           }),
         );
       }
+      if (updateExisting) body.append("updateExisting", "true");
       const result = await importStudentsFileAction(body);
       if (!result.ok) {
         notify("error", importErrorMessage(result.error, result.retryAfter));
@@ -365,14 +370,17 @@ export function CsvImport({
               failed: result.failed.length,
             })
           : t("onboarding.toast.imported", { created: result.created });
-      if (result.feeEntries > 0 || result.alreadyPosted > 0) {
+      if (result.updated > 0 || result.unchanged > 0) {
         message +=
           " " +
-          t("onboarding.toast.feesPosted", {
-            entries: result.feeEntries,
+          t("onboarding.toast.existingUpdated", {
             updated: result.updated,
-            already: result.alreadyPosted,
+            unchanged: result.unchanged,
           });
+      }
+      if (result.feeEntries > 0) {
+        message +=
+          " " + t("onboarding.toast.feesPosted", { entries: result.feeEntries });
       }
       notify("success", message);
       router.refresh();
@@ -605,26 +613,28 @@ export function CsvImport({
                         </label>
                       )}
 
-                      <label className="flex items-start gap-2 text-xs text-ink">
-                        <input
-                          type="checkbox"
-                          checked={updateExisting}
-                          onChange={(e) => setUpdateExisting(e.target.checked)}
-                          className="mt-0.5"
-                        />
-                        <span>
-                          <span className="font-medium">
-                            {t("onboarding.csv.updateExisting")}
-                          </span>
-                          <span className="block text-muted">
-                            {t("onboarding.csv.updateExistingHint")}
-                          </span>
-                        </span>
-                      </label>
                     </div>
                   )}
                 </section>
               )}
+
+              {/* Existing students: update instead of skipping as duplicates. */}
+              <label className="flex items-start gap-2 rounded-md border border-line px-4 py-3 text-xs text-ink">
+                <input
+                  type="checkbox"
+                  checked={updateExisting}
+                  onChange={(e) => setUpdateExisting(e.target.checked)}
+                  className="mt-0.5"
+                />
+                <span>
+                  <span className="font-medium">
+                    {t("onboarding.csv.updateExisting")}
+                  </span>
+                  <span className="block text-muted">
+                    {t("onboarding.csv.updateExistingHint")}
+                  </span>
+                </span>
+              </label>
 
               {/* Rows the server refused on the last import attempt. */}
               {failures && failures.length > 0 && (
@@ -682,6 +692,9 @@ export function CsvImport({
                           {t("onboarding.csv.fieldCourse")}
                         </th>
                         <th className="px-3 py-2 font-medium">
+                          {t("onboarding.csv.fieldAdmissionYear")}
+                        </th>
+                        <th className="px-3 py-2 font-medium">
                           {t("onboarding.csv.fieldYear")}
                         </th>
                         {mappedFeeTargets.length > 0 && (
@@ -724,6 +737,9 @@ export function CsvImport({
                               ) : (
                                 <span className="text-muted">—</span>
                               )}
+                            </td>
+                            <td className="px-3 py-1.5 text-muted">
+                              {parseAdmissionYear(row.admissionYear) ?? "—"}
                             </td>
                             <td className="px-3 py-1.5 text-muted">
                               {resolvedYears[i] || "—"}

@@ -162,6 +162,8 @@ export const updateUserSchema = z.strictObject({
   course: optionalText(LIMITS.shortText),
   className: optionalText(LIMITS.shortText),
   practicalBatch: optionalText(LIMITS.shortText),
+  // Calendar year of admission (students). null clears it; omitted leaves it.
+  admissionYear: z.number().int().min(1950).max(2100).nullable().optional(),
   status: userStatusEnum,
 });
 

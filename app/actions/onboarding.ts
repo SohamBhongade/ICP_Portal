@@ -396,6 +396,8 @@ export type UpdateUserInput = {
   course?: string;
   className?: string;
   practicalBatch?: string;
+  /** Year of admission, e.g. 2024. null clears it; omitted leaves it as is. */
+  admissionYear?: number | null;
   status: "pending" | "active" | "rejected";
 };
 
@@ -496,6 +498,9 @@ export async function updateUserAction(
         year: isStaff ? null : year,
         className: isStaff ? null : (data.className ?? null),
         practicalBatch: isStaff ? null : (data.practicalBatch ?? null),
+        ...(data.admissionYear !== undefined
+          ? { admissionYear: isStaff ? null : data.admissionYear }
+          : {}),
         ...(passwordHash ? { passwordHash } : {}),
         status: nextStatus,
         updatedAt: new Date(),

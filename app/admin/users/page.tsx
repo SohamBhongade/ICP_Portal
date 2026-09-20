@@ -35,6 +35,8 @@ export default async function UsersPage() {
         course: users.course,
         className: users.className,
         practicalBatch: users.practicalBatch,
+        year: users.year,
+        admissionYear: users.admissionYear,
         status: users.status,
         createdAt: users.createdAt,
       })
