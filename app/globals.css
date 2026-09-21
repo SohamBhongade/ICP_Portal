@@ -40,6 +40,10 @@
   --warning: #b45309;
   --danger: #b91c1c;
 
+  /* Height of the sticky app header (AppShell). The users grid parks its own
+     sticky table header directly beneath it, so the two must agree. */
+  --app-header-h: 4rem;
+
   /* Data-grid scrollbars. Deliberately high-contrast rather than subtle —
      see the .dt-scroll block below for why. */
   --scrollbar-track: #e5e7eb;
@@ -174,6 +178,21 @@
   track rather than filling it edge to edge.
 */
 @layer components {
+  /* Horizontal-only variant for the users grid: the page owns vertical
+     scrolling (see the note in UsersTable.tsx), this element owns the columns.
+     `overflow-y: clip` stops a second vertical scrollbar appearing inside the
+     table; next to a scrolling overflow-x the spec computes it to `hidden`,
+     which is exactly the behaviour wanted here (the element never scrolls
+     vertically because it is never taller than its content). Everything else
+     matches .dt-scroll below. */
+  .dt-scroll-x {
+    overflow-x: scroll;
+    overflow-y: clip;
+    scrollbar-gutter: stable;
+    scrollbar-width: auto;
+    scrollbar-color: var(--scrollbar-thumb) var(--scrollbar-track);
+  }
+
   .dt-scroll {
     overflow: scroll;
     scrollbar-gutter: stable;
@@ -183,19 +202,22 @@
   }
 
   /* Chromium / WebKit */
-  .dt-scroll::-webkit-scrollbar {
+  .dt-scroll::-webkit-scrollbar,
+  .dt-scroll-x::-webkit-scrollbar {
     -webkit-appearance: none;
     appearance: none;
     width: var(--scrollbar-size);
     height: var(--scrollbar-size);
   }
 
-  .dt-scroll::-webkit-scrollbar-track {
+  .dt-scroll::-webkit-scrollbar-track,
+  .dt-scroll-x::-webkit-scrollbar-track {
     background: var(--scrollbar-track);
     border-radius: calc(var(--scrollbar-size) / 2);
   }
 
-  .dt-scroll::-webkit-scrollbar-thumb {
+  .dt-scroll::-webkit-scrollbar-thumb,
+  .dt-scroll-x::-webkit-scrollbar-thumb {
     background-color: var(--scrollbar-thumb);
     border: 3px solid var(--scrollbar-track);
     border-radius: calc(var(--scrollbar-size) / 2);
@@ -204,12 +226,14 @@
     min-width: 40px;
   }
 
-  .dt-scroll::-webkit-scrollbar-thumb:hover {
+  .dt-scroll::-webkit-scrollbar-thumb:hover,
+  .dt-scroll-x::-webkit-scrollbar-thumb:hover {
     background-color: var(--scrollbar-thumb-hover);
   }
 
   /* The square where the two bars meet. Untouched it renders as a white notch. */
-  .dt-scroll::-webkit-scrollbar-corner {
+  .dt-scroll::-webkit-scrollbar-corner,
+  .dt-scroll-x::-webkit-scrollbar-corner {
     background: var(--scrollbar-track);
   }
 

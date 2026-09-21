@@ -39,6 +39,7 @@ import { fieldErrorSuffix } from "@/lib/validation/client";
 import { todayIso } from "@/lib/dates";
 import { extractYear } from "@/lib/courses";
 import { studyYearLabelKey } from "@/lib/academic-year";
+import { compareRosterEntries } from "@/lib/roster-order";
 
 type Student = {
   id: number;
@@ -85,12 +86,16 @@ export function FeesAdmin({ students }: { students: Student[] }) {
 
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
-    if (!q) return students;
-    return students.filter(
-      (s) =>
-        s.fullName.toLowerCase().includes(q) ||
-        (s.studentId?.toLowerCase().includes(q) ?? false),
-    );
+    const matches = q
+      ? students.filter(
+          (s) =>
+            s.fullName.toLowerCase().includes(q) ||
+            (s.studentId?.toLowerCase().includes(q) ?? false),
+        )
+      : [...students];
+    // Same order as the Users grid: by intake year, then roll number, so the
+    // clerk finds a student in the same place on both screens.
+    return matches.sort(compareRosterEntries);
   }, [students, search]);
 
   const loadLedger = (id: number) =>
@@ -140,7 +145,11 @@ export function FeesAdmin({ students }: { students: Student[] }) {
             <p className="mb-2 text-xs text-muted">
               {t("fees.studentsCount", { count: filtered.length })}
             </p>
-            <ul className="max-h-[60vh] space-y-1 overflow-y-auto">
+            {/* `dt-scroll` (globals.css) instead of `overflow-y-auto`: this
+                list is height-capped, so its scrollbar is the only way to
+                reach the students below the fold and must be drawn
+                permanently rather than fading in on hover. */}
+            <ul className="dt-scroll max-h-[60vh] space-y-1">
               {filtered.length === 0 ? (
                 <li className="py-6 text-center text-sm text-muted">
                   {t("fees.noStudents")}

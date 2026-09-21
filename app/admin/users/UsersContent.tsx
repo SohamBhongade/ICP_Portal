@@ -36,6 +36,7 @@ import {
 import { customColumnKey } from "@/lib/user-fields";
 import { extractYear } from "@/lib/courses";
 import { STUDY_YEARS, studyYearLabelKey } from "@/lib/academic-year";
+import { compareRosterEntries } from "@/lib/roster-order";
 import { ColumnManager } from "./ColumnManager";
 import { CreateUserDrawer } from "./CreateUserDrawer";
 import { CsvImport } from "./CsvImport";
@@ -269,7 +270,7 @@ export function UsersContent({
 
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
-    return rows.filter((u) => {
+    const matches = rows.filter((u) => {
       if (roleFilter && u.role !== roleFilter) return false;
       if (courseFilter && u.course !== courseFilter) return false;
       if (classFilter && u.className !== classFilter) return false;
@@ -284,6 +285,10 @@ export function UsersContent({
         (u.email?.toLowerCase().includes(q) ?? false)
       );
     });
+    // The office reads this roster by intake: every 2024 student in roll order,
+    // then every 2025 student in roll order (lib/roster-order). `sort` mutates,
+    // so it runs on the array `filter` just produced, never on the `rows` prop.
+    return matches.sort(compareRosterEntries);
   }, [
     rows,
     search,

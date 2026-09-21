@@ -329,7 +329,7 @@ export function AppShell({
       <div
         className={`transition-[padding] duration-200 ${pinned ? "md:pl-64" : ""}`}
       >
-        <header className="sticky top-0 z-20 flex h-16 items-center gap-3 border-b border-line bg-surface/90 px-4 backdrop-blur sm:px-6">
+        <header className="sticky top-0 z-20 flex h-[var(--app-header-h)] items-center gap-3 border-b border-line bg-surface/90 px-4 backdrop-blur sm:px-6">
           <button
             ref={openerRef}
             type="button"

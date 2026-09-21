@@ -18,7 +18,7 @@
 //     travel with a sticky cell in Chrome and Safari.
 //
 //  3. Stacking order is explicit: scrolling body cells (auto) < frozen body
-//     cells (z-20) < the sticky header (z-30) < the header's own frozen corner
+//     cells (z-20) < the header row (z-30) < the header's own frozen corner
 //     cells (z-40). Every sticky cell also needs an opaque background, or the
 //     rows it overlaps show through it.
 //
@@ -60,9 +60,31 @@ const HEAD_CELL =
 /** Below this the grid switches to the card list — see the note on UsersCardList. */
 const TABLE_MEDIA_QUERY = "(min-width: 768px)";
 
-/** Bounded scroll box: never taller than 68% of the viewport, never shorter
- *  than a few rows, so the surrounding page chrome stays put. */
-const SCROLL_BOX = "max-h-[min(68vh,42rem)] min-h-[14rem]";
+/**
+ * VERTICAL SCROLLING BELONGS TO THE PAGE.
+ *
+ * The grid used to live in its own height-capped scroll box. That put the rows
+ * behind a SECOND scrollbar inside the page — and whether that inner scrollbar
+ * is actually drawn depends on the browser and the OS. On a machine that draws
+ * overlay (fade-away) scrollbars it is invisible until you already know to
+ * scroll, so the table reads as "only shows nine students, the rest are gone".
+ *
+ * Now the list grows to its full height and the WINDOW scrollbar — the one
+ * every user already knows, always drawn on Windows — moves it.
+ *
+ * Horizontal scrolling still belongs to the table (the page must never scroll
+ * sideways): `.dt-scroll-x` gives this element `overflow-x: scroll` with a
+ * permanently drawn track.
+ *
+ * THE TRADE, stated plainly: the column headers no longer stay pinned while
+ * you scroll down. CSS does not allow both — an element that scrolls on one
+ * axis is a scroll container on BOTH (overflow-y: clip next to a scrolling
+ * overflow-x computes to `hidden`), so a `sticky` header inside it anchors to
+ * this box rather than to the page, and a box that no longer caps its own
+ * height has nothing to anchor against. A pinned header is worth less than
+ * being able to reach row 20, and the frozen Roll No. / Name rail still
+ * identifies every row while the other columns scroll sideways.
+ */
 
 /** The selection column's synthetic key inside the frozen-left rail. */
 const SELECT_KEY = "select";
@@ -199,15 +221,14 @@ function UsersGrid({
         tabIndex={0}
         role="region"
         aria-label={t("onboarding.tableRegion")}
-        // `.dt-scroll` (globals.css) bounds BOTH axes to this element with
-        // `overflow: scroll` — permanently drawn, high-contrast tracks, because
-        // an overlay scrollbar that only appears on hover reads as "this table
-        // does not scroll" to the office staff who use this screen. It replaces
-        // the previous `overflow-auto`; see the CSS for the full reasoning.
-        // `overscroll-x-contain` stops a horizontal fling from chaining out to
-        // the document once the rail hits its end, which is what keeps the page
-        // itself from ever scrolling sideways.
-        className={`relative ${SCROLL_BOX} dt-scroll overscroll-x-contain`}
+        // `.dt-scroll-x` (globals.css) takes the HORIZONTAL axis only, with a
+        // permanently drawn, high-contrast track — an overlay scrollbar that
+        // only appears on hover reads as "there are no more columns" to the
+        // office staff who use this screen. Vertical scrolling is the page's
+        // (see HEADER_STICKY_TOP above). `overscroll-x-contain` stops a
+        // horizontal fling from chaining out to the document once the rail
+        // hits its end, which is what keeps the page from scrolling sideways.
+        className="dt-scroll-x relative overscroll-x-contain"
       >
         <table
           className="w-full border-separate border-spacing-0 text-left text-sm"
@@ -229,9 +250,11 @@ function UsersGrid({
                 <th
                   key={key}
                   scope="col"
-                  // z-40: the top-left corner outranks both the sticky header
-                  // row and the frozen body cells it crosses.
-                  className={`${HEAD_CELL} sticky top-0 z-40 whitespace-nowrap ${
+                  // `sticky` here is HORIZONTAL only (no `top`): it freezes
+                  // this header cell over the scrolling columns, matching the
+                  // body rail below. z-40 outranks the frozen body cells it
+                  // crosses.
+                  className={`${HEAD_CELL} sticky z-40 whitespace-nowrap ${
                     i === leftKeys.length - 1 ? "dt-pin-left-edge" : ""
                   }`}
                   style={{ left: leftOffsets[i] }}
@@ -255,7 +278,7 @@ function UsersGrid({
                 <th
                   key={key}
                   scope="col"
-                  className={`${HEAD_CELL} sticky top-0 z-30`}
+                  className={`${HEAD_CELL} z-30`}
                 >
                   <span className="block truncate" title={headerLabel(key, fieldByKey, t)}>
                     {headerLabel(key, fieldByKey, t)}
@@ -265,7 +288,7 @@ function UsersGrid({
               {canManage && (
                 <th
                   scope="col"
-                  className={`${HEAD_CELL} dt-pin-right-edge sticky right-0 top-0 z-40`}
+                  className={`${HEAD_CELL} dt-pin-right-edge sticky right-0 z-40`}
                 >
                   {t("onboarding.colActions")}
                 </th>
@@ -631,7 +654,7 @@ function UsersCardList({
 
   return (
     <ul
-      className={`flex ${SCROLL_BOX} flex-col gap-3 overflow-y-auto overscroll-y-contain`}
+      className="flex flex-col gap-3"
     >
       {rows.map((u) => {
         const selected = selection?.selected.has(u.id) ?? false;
