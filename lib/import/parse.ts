@@ -58,6 +58,10 @@ export type ImportRejection =
 export type ParsedSheet = {
   headers: string[];
   rows: Record<string, string>[];
+  /** Worksheet the rows came from. Undefined for a CSV, which has only one. */
+  sheetName?: string;
+  /** Every worksheet in the workbook, in TAB order. Lets the operator switch. */
+  sheetNames?: string[];
 };
 
 export type ParseOutcome =
@@ -215,12 +219,19 @@ function decodeXmlEntities(text: string): string {
     .replace(/&amp;/g, "&");
 }
 
-/** Collect the text of every <t> descendant inside one XML fragment. */
+/**
+ * Collect the text of every <t> descendant inside one XML fragment.
+ *
+ * `<rPh>` runs are stripped first: they hold the PHONETIC guide for a string
+ * (furigana), not the string itself, so including their <t> elements appends
+ * a second copy of the text to the value.
+ */
 function textOf(fragment: string): string {
+  const cleaned = fragment.replace(/<rPh[\s\S]*?<\/rPh>/g, "");
   let out = "";
   const re = /<t[^>]*>([\s\S]*?)<\/t>/g;
   let m: RegExpExecArray | null;
-  while ((m = re.exec(fragment)) !== null) out += m[1];
+  while ((m = re.exec(cleaned)) !== null) out += m[1];
   return decodeXmlEntities(out);
 }
 
@@ -232,7 +243,58 @@ function columnIndex(ref: string): number {
   return index - 1;
 }
 
-function parseXlsx(bytes: Uint8Array): ParseOutcome {
+/**
+ * Worksheets in TAB order, with the file each one lives in.
+ *
+ * WHY THIS EXISTS: the parser used to read `xl/worksheets/sheet1.xml` and call
+ * it the roster. That file name is an internal part number, NOT "the first
+ * tab" — a workbook whose tabs have been reordered, or where the first tab was
+ * deleted and re-added, stores the visible first tab as sheet3.xml just as
+ * easily. So a college importing the tab they were looking at could silently
+ * get a different class's columns. The mapping from tab to file lives in
+ * xl/workbook.xml (order + names + hidden state) plus its .rels (name -> file),
+ * which is what this reads.
+ */
+type SheetRef = { name: string; path: string; hidden: boolean };
+
+function readSheetRefs(files: Record<string, Uint8Array>): SheetRef[] {
+  const decoder = new TextDecoder("utf-8");
+  const workbook = files["xl/workbook.xml"];
+  const rels = files["xl/_rels/workbook.xml.rels"];
+  if (!workbook || !rels) return [];
+
+  // rId -> worksheet path. Targets are relative to xl/ and may be "/xl/..".
+  const relXml = decoder.decode(rels);
+  const byId = new Map<string, string>();
+  const relRe = /<Relationship\b[^>]*>/g;
+  let rel: RegExpExecArray | null;
+  while ((rel = relRe.exec(relXml)) !== null) {
+    const tag = rel[0];
+    const id = /\bId="([^"]+)"/.exec(tag)?.[1];
+    const target = /\bTarget="([^"]+)"/.exec(tag)?.[1];
+    if (!id || !target) continue;
+    const path = target.replace(/^\/?xl\//, "").replace(/^\.\//, "");
+    byId.set(id, `xl/${path}`);
+  }
+
+  const wbXml = decoder.decode(workbook);
+  const sheets: SheetRef[] = [];
+  const sheetRe = /<sheet\b[^>]*\/?>/g;
+  let m: RegExpExecArray | null;
+  while ((m = sheetRe.exec(wbXml)) !== null) {
+    const tag = m[0];
+    const name = decodeXmlEntities(/\bname="([^"]*)"/.exec(tag)?.[1] ?? "");
+    const rid = /\br:id="([^"]+)"/.exec(tag)?.[1] ?? /\bid="([^"]+)"/.exec(tag)?.[1];
+    const path = rid ? byId.get(rid) : undefined;
+    if (!name || !path) continue;
+    // state="hidden" / "veryHidden" tabs are never the one the operator means.
+    const hidden = /\bstate="(hidden|veryHidden)"/.test(tag);
+    sheets.push({ name, path, hidden });
+  }
+  return sheets;
+}
+
+function parseXlsx(bytes: Uint8Array, wantedSheet?: string): ParseOutcome {
   let files: Record<string, Uint8Array>;
   try {
     let extracted = 0;
@@ -243,11 +305,15 @@ function parseXlsx(bytes: Uint8Array): ParseOutcome {
         // anything beyond the ceiling is simply never extracted.
         extracted += file.originalSize;
         if (extracted > IMPORT_LIMITS.maxUnzippedBytes) return false;
-        // Only the two entries a roster needs. Everything else in the archive
-        // (macros, embedded objects, external links) is never even inflated.
+        // Only what a roster needs: the shared strings, the workbook index
+        // (tab order + names) with its relationship map, and the worksheets
+        // themselves. Everything else in the archive (macros, embedded
+        // objects, external links, charts) is never even inflated.
         return (
           file.name === "xl/sharedStrings.xml" ||
-          /^xl\/worksheets\/sheet1\.xml$/.test(file.name)
+          file.name === "xl/workbook.xml" ||
+          file.name === "xl/_rels/workbook.xml.rels" ||
+          /^xl\/worksheets\/[^/]+\.xml$/.test(file.name)
         );
       },
     });
@@ -255,20 +321,42 @@ function parseXlsx(bytes: Uint8Array): ParseOutcome {
     return { ok: false, reason: "corruptFile" };
   }
 
-  const sheetBytes = files["xl/worksheets/sheet1.xml"];
+  // WHICH TAB. The caller's choice wins (the import dialog offers a picker);
+  // otherwise the first tab that is not hidden — which is the one a person
+  // opening the workbook sees. Falling back to sheet1.xml keeps files whose
+  // workbook index we could not read working exactly as before.
+  const refs = readSheetRefs(files).filter((r) => files[r.path]);
+  const visible = refs.filter((r) => !r.hidden);
+  const chosen =
+    (wantedSheet
+      ? refs.find((r) => r.name === wantedSheet)
+      : undefined) ??
+    visible[0] ??
+    refs[0];
+
+  const sheetBytes = chosen
+    ? files[chosen.path]
+    : files["xl/worksheets/sheet1.xml"];
   if (!sheetBytes) return { ok: false, reason: "corruptFile" };
+  const sheetNames = visible.length > 0 ? visible.map((r) => r.name) : undefined;
 
   const decoder = new TextDecoder("utf-8");
   const sheetXml = decoder.decode(sheetBytes);
 
-  // Shared strings: xlsx stores repeated text once and references it by index.
+  // Shared strings: xlsx stores repeated text once and references it by index,
+  // so EVERY <si> must be counted — cells reference them by POSITION.
+  //
+  // `<si/>` (an empty string) is written self-closing, and the old pattern only
+  // matched the `<si>…</si>` form. Skipping one shifts every later index by
+  // one, which shows up as text from the neighbouring cell — or a blank where
+  // a value plainly exists in Excel. The alternation below matches both forms.
   const shared: string[] = [];
   const sharedBytes = files["xl/sharedStrings.xml"];
   if (sharedBytes) {
     const xml = decoder.decode(sharedBytes);
-    const re = /<si>([\s\S]*?)<\/si>/g;
+    const re = /<si>([\s\S]*?)<\/si>|<si\s*\/>/g;
     let m: RegExpExecArray | null;
-    while ((m = re.exec(xml)) !== null) shared.push(textOf(m[1]));
+    while ((m = re.exec(xml)) !== null) shared.push(m[1] ? textOf(m[1]) : "");
   }
 
   // Walk the rows. Bounded as we go, so a 500 000-row sheet stops at the cap.
@@ -343,7 +431,10 @@ function parseXlsx(bytes: Uint8Array): ParseOutcome {
   }
 
   if (rows.length === 0) return { ok: false, reason: "noRows" };
-  return { ok: true, sheet: { headers, rows } };
+  return {
+    ok: true,
+    sheet: { headers, rows, sheetName: chosen?.name, sheetNames },
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -355,7 +446,11 @@ function parseXlsx(bytes: Uint8Array): ParseOutcome {
  * through — both the preview step and the authoritative import call it, so the
  * two can never disagree about what the file contains.
  */
-export async function parseImportFile(file: File): Promise<ParseOutcome> {
+export async function parseImportFile(
+  file: File,
+  /** Worksheet (tab) to read. Ignored for CSV. Defaults to the first visible. */
+  sheetName?: string,
+): Promise<ParseOutcome> {
   // 1. SIZE, from the multipart metadata — before a single byte is read into
   //    memory, which is the whole point of checking it here rather than after.
   if (file.size > IMPORT_LIMITS.maxFileBytes) {
@@ -374,7 +469,7 @@ export async function parseImportFile(file: File): Promise<ParseOutcome> {
   // 2. TYPE by content, ignoring the filename entirely.
   const type = detectType(bytes);
   if (type === "xls") return { ok: false, reason: "legacyXls" };
-  if (type === "xlsx") return parseXlsx(bytes);
+  if (type === "xlsx") return parseXlsx(bytes, sheetName);
   if (type === "csv") {
     try {
       return parseCsv(new TextDecoder("utf-8", { fatal: true }).decode(bytes));

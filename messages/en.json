@@ -257,7 +257,15 @@
       "importedBlank": "{count} cell(s) were imported blank because they could not be read.",
       "colWillSave": "will be saved as",
       "unreadable": "unreadable",
-      "fieldDob": "D.O.B"
+      "fieldDob": "D.O.B",
+      "sheetLabel": "Sheet",
+      "sheetReading": "· tab “{sheet}”",
+      "rowIssuesTitle": "{count} rows will be skipped",
+      "rowIssueLine": "{reason} — rows {rows}{more}",
+      "rowIssuesHint": "Row numbers count data rows in the sheet, not counting the heading row. Fix them in the spreadsheet and upload again, or import the rest now and add these separately.",
+      "statusReady": "Ready",
+      "rowIssuesTitleOne": "1 row will be skipped",
+      "rowIssueLineOne": "{reason} — row {rows}"
     },
     "errors": {
       "missingName": "Full name is required",

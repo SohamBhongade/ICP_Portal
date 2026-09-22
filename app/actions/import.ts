@@ -169,6 +169,10 @@ export type PreviewResult =
       ok: true;
       headers: string[];
       rows: Record<string, string>[];
+      /** Worksheet these rows came from (xlsx only). */
+      sheetName?: string;
+      /** Every visible worksheet, in tab order, so the operator can switch. */
+      sheetNames?: string[];
       /** Live custom columns, offered as additional mapping targets. */
       customFields: CustomField[];
       /** Whether this operator may post fee columns to the ledger (feeWrites). */
@@ -243,6 +247,18 @@ async function assertCreateUsers() {
   return currentUserWithCapability("createUsers");
 }
 
+/**
+ * The worksheet the operator picked, or undefined for "the first visible tab".
+ * Bounded like every other client-supplied string; an unknown name simply
+ * falls back to the default inside the parser.
+ */
+function sheetFrom(formData: FormData): string | undefined {
+  const raw = formData.get("sheet");
+  if (typeof raw !== "string") return undefined;
+  const trimmed = raw.trim();
+  return trimmed && trimmed.length <= LIMITS.shortText ? trimmed : undefined;
+}
+
 /** Pull the single upload out of the form, or null. */
 function fileFrom(formData: FormData): File | null {
   const value = formData.get("file");
@@ -270,13 +286,19 @@ export async function parseImportFileAction(
   const file = fileFrom(formData);
   if (!file) return { ok: false, error: "missingFile" };
 
-  const parsed = await parseImportFile(file);
+  // WHICH TAB. A workbook can hold last year's roster on another tab, so the
+  // dialog offers a picker; the chosen name comes back with every later call.
+  const sheetName = sheetFrom(formData);
+
+  const parsed = await parseImportFile(file, sheetName);
   if (!parsed.ok) return { ok: false, error: parsed.reason };
 
   return {
     ok: true,
     headers: parsed.sheet.headers,
     rows: parsed.sheet.rows,
+    sheetName: parsed.sheet.sheetName,
+    sheetNames: parsed.sheet.sheetNames,
     // Sent with the preview so the mapping UI can offer custom columns without
     // a second round trip. Authoritative either way: the import re-loads them.
     customFields: await listUserFields(),
@@ -382,8 +404,10 @@ export async function importStudentsFileAction(
   // choose to accept the blank, having seen it in the preview.
   const allowBlankDates = formData.get("allowBlankDates") === "true";
 
-  // RE-PARSE. The preview's rows went through the client and are not trusted.
-  const parsed = await parseImportFile(file);
+  // RE-PARSE, from the SAME tab the preview showed. The preview's rows went
+  // through the client and are not trusted; the tab NAME is just a selector,
+  // and an unknown one falls back to the first visible sheet.
+  const parsed = await parseImportFile(file, sheetFrom(formData));
   if (!parsed.ok) return { ok: false, error: parsed.reason };
 
   return insertRows(

@@ -214,6 +214,11 @@ export function CsvImport({
   const [rows, setRows] = useState<RawRow[]>([]);
   const [mapping, setMapping] = useState<Mapping>({});
   const [customFields, setCustomFields] = useState<CustomField[]>([]);
+  // Worksheet (tab) being read, and every visible tab in the workbook. A
+  // workbook often carries last year's roster on a second tab, and the
+  // importer used to read whichever one happened to be stored first.
+  const [sheetName, setSheetName] = useState("");
+  const [sheetNames, setSheetNames] = useState<string[]>([]);
   const [dragging, setDragging] = useState(false);
 
   // Fee-ledger posting options (only used when a fee column is mapped).
@@ -237,10 +242,13 @@ export function CsvImport({
 
   // Upload for parsing. The server decides whether the file is acceptable and
   // what it contains; this component only renders the answer.
-  const parseFile = (file: File) => {
+  const parseFile = (file: File, sheet?: string) => {
     startTransition(async () => {
       const body = new FormData();
       body.append("file", file);
+      // Which worksheet to read. Omitted on the first parse, which makes the
+      // server pick the first visible tab and tell us what the others are.
+      if (sheet) body.append("sheet", sheet);
       const res = await parseImportFileAction(body);
       if (!res.ok) {
         notify("error", importErrorMessage(res.error, res.retryAfter));
@@ -251,6 +259,8 @@ export function CsvImport({
       setHeaders(res.headers);
       setRows(res.rows);
       setCustomFields(res.customFields);
+      setSheetName(res.sheetName ?? "");
+      setSheetNames(res.sheetNames ?? []);
       setCanPostFees(res.canPostFees);
       setFeeDate(res.today);
       // Fee columns are guessed AFTER the roster fields, so a header can never
@@ -452,6 +462,28 @@ export function CsvImport({
   );
   const invalidCount = rows.length - validRows.length;
 
+  /**
+   * WHICH rows will be skipped, and why — across the WHOLE file.
+   *
+   * The preview shows ten rows; the bad row is regularly not one of them, so
+   * "1 with errors" used to be a number with no way to chase it down. This
+   * groups every refusal by reason and names the row numbers, so the operator
+   * can go straight to that line in the spreadsheet.
+   */
+  const rowIssueSummary = useMemo(() => {
+    const byReason = new Map<PreviewIssue, number[]>();
+    validations.forEach((issue, i) => {
+      if (!issue) return;
+      const rows = byReason.get(issue) ?? [];
+      rows.push(i + 1);
+      byReason.set(issue, rows);
+    });
+    return Array.from(byReason, ([reason, rowNumbers]) => ({
+      reason,
+      rowNumbers,
+    }));
+  }, [validations]);
+
   const reset = () => {
     setFailures(null);
     setServerCellIssues([]);
@@ -462,6 +494,8 @@ export function CsvImport({
     setHeaders([]);
     setRows([]);
     setMapping({});
+    setSheetName("");
+    setSheetNames([]);
     if (inputRef.current) inputRef.current.value = "";
   };
 
@@ -490,6 +524,8 @@ export function CsvImport({
           }),
         );
       }
+      // The SAME tab the preview read — the server re-parses from scratch.
+      if (sheetName) body.append("sheet", sheetName);
       if (updateExisting) body.append("updateExisting", "true");
       if (allowBlankDates) body.append("allowBlankDates", "true");
       const result = await importStudentsFileAction(body);
@@ -602,20 +638,47 @@ export function CsvImport({
             </div>
           ) : (
             <>
-              <div className="flex items-center justify-between rounded-md border border-line bg-canvas px-3 py-2 text-sm">
+              <div className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-line bg-canvas px-3 py-2 text-sm">
                 <span className="text-ink">
                   {t("onboarding.csv.fileSelected", {
                     name: fileName,
                     count: rows.length,
                   })}
+                  {sheetName && (
+                    <span className="text-muted">
+                      {" "}
+                      {t("onboarding.csv.sheetReading", { sheet: sheetName })}
+                    </span>
+                  )}
                 </span>
-                <button
-                  type="button"
-                  onClick={reset}
-                  className="text-sm font-medium text-teal hover:underline"
-                >
-                  {t("onboarding.csv.reset")}
-                </button>
+                <span className="flex items-center gap-3">
+                  {/* Only when the workbook actually has more than one tab —
+                      otherwise this is a dropdown with a single choice. */}
+                  {sheetNames.length > 1 && file && (
+                    <label className="flex items-center gap-2 text-xs text-muted">
+                      {t("onboarding.csv.sheetLabel")}
+                      <select
+                        value={sheetName}
+                        disabled={pending}
+                        onChange={(e) => parseFile(file, e.target.value)}
+                        className="rounded-md border border-line bg-surface px-2 py-1 text-sm text-ink focus:border-teal"
+                      >
+                        {sheetNames.map((name) => (
+                          <option key={name} value={name}>
+                            {name}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                  )}
+                  <button
+                    type="button"
+                    onClick={reset}
+                    className="text-sm font-medium text-teal hover:underline"
+                  >
+                    {t("onboarding.csv.reset")}
+                  </button>
+                </span>
               </div>
 
               {/* Step 2: column mapping */}
@@ -854,6 +917,43 @@ export function CsvImport({
                   {t("onboarding.csv.previewHint", { count: PREVIEW_ROWS })}
                 </p>
 
+                {/* WHICH ROWS will be skipped. Named by row number and
+                    reason, because the offending row is usually outside the
+                    ten the table shows. */}
+                {rowIssueSummary.length > 0 && (
+                  <div className="mb-3 rounded-md border border-danger/40 bg-lavender/40 p-3">
+                    <h4 className="text-sm font-semibold text-danger">
+                      {invalidCount === 1
+                        ? t("onboarding.csv.rowIssuesTitleOne")
+                        : t("onboarding.csv.rowIssuesTitle", {
+                            count: invalidCount,
+                          })}
+                    </h4>
+                    <ul className="mt-1 text-xs text-ink">
+                      {rowIssueSummary.map((entry) => (
+                        <li key={entry.reason}>
+                          {t(
+                            entry.rowNumbers.length === 1
+                              ? "onboarding.csv.rowIssueLineOne"
+                              : "onboarding.csv.rowIssueLine",
+                            {
+                              reason: t(`onboarding.errors.${entry.reason}`),
+                              rows: entry.rowNumbers.slice(0, 12).join(", "),
+                              more:
+                                entry.rowNumbers.length > 12
+                                  ? ` +${entry.rowNumbers.length - 12}`
+                                  : "",
+                            },
+                          )}
+                        </li>
+                      ))}
+                    </ul>
+                    <p className="mt-2 text-xs text-muted">
+                      {t("onboarding.csv.rowIssuesHint")}
+                    </p>
+                  </div>
+                )}
+
                 {/* PER-COLUMN failure summary. This is the report the operator
                     acts on: which column, how many rows, and what the offending
                     cells actually say. */}
@@ -904,6 +1004,12 @@ export function CsvImport({
                         <th className="px-3 py-2 font-medium">
                           {t("onboarding.csv.rowLabel")}
                         </th>
+                        {/* Status sits SECOND, not last: the table scrolls
+                            sideways, and a verdict the operator has to scroll
+                            to find is a verdict they never see. */}
+                        <th className="px-3 py-2 font-medium">
+                          {t("onboarding.csv.statusOk")}
+                        </th>
                         <th className="px-3 py-2 font-medium">
                           {t("onboarding.csv.fieldFullName")}
                         </th>
@@ -936,9 +1042,6 @@ export function CsvImport({
                             {t("onboarding.csv.fieldFeeBalance")}
                           </th>
                         )}
-                        <th className="px-3 py-2 font-medium">
-                          {t("onboarding.csv.statusOk")}
-                        </th>
                       </tr>
                     </thead>
                     <tbody>
@@ -947,9 +1050,22 @@ export function CsvImport({
                         return (
                           <tr
                             key={i}
-                            className="border-b border-line last:border-0"
+                            className={`border-b border-line last:border-0 ${
+                              err ? "bg-lavender/40" : ""
+                            }`}
                           >
                             <td className="px-3 py-1.5 text-muted">{i + 1}</td>
+                            <td className="whitespace-nowrap px-3 py-1.5">
+                              {err ? (
+                                <span className="font-medium text-danger">
+                                  {t(`onboarding.errors.${err}`)}
+                                </span>
+                              ) : (
+                                <span className="text-teal">
+                                  {t("onboarding.csv.statusReady")}
+                                </span>
+                              )}
+                            </td>
                             <td className="px-3 py-1.5 text-ink">
                               {row.fullName || "—"}
                             </td>
@@ -1002,17 +1118,6 @@ export function CsvImport({
                             {mappedFeeTargets.length > 0 && (
                               <FeeBalanceCell result={feeResults[i]} />
                             )}
-                            <td className="px-3 py-1.5">
-                              {err ? (
-                                <span className="text-danger">
-                                  {t(`onboarding.errors.${err}`)}
-                                </span>
-                              ) : (
-                                <span className="text-teal">
-                                  {t("onboarding.csv.statusOk")}
-                                </span>
-                              )}
-                            </td>
                           </tr>
                         );
                       })}
